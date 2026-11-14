@@ -52,7 +52,6 @@ pub fn early_banner() {
     serial::init();
     vga::clear();
     vga::set_color(vga::COLOR_LIGHT_CYAN, vga::COLOR_BLACK);
-    println!("minios v0.1.0 (x86, rust)");
+    println!("minios v0.2.0 (x86, rust)");
     vga::set_color(vga::COLOR_LIGHT_GREY, vga::COLOR_BLACK);
-    println!("m0 boot skeleton: multiboot -> rust_main");
 }

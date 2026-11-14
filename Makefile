@@ -9,24 +9,30 @@ QEMU     := qemu-system-i386
 RUN_SECS := 10
 RUN_LOG  := /tmp/minios-run.log
 
-.PHONY: all build run check fmt clean
+.PHONY: all build run run-debug user fs.img check fmt clean
 
-all: build
+all: build fs.img
 
 build:
 	cargo build --target $(TARGET) --release
 
-# Boot the kernel under QEMU for a few seconds and verify the serial log.
-run: build
+# Full system boot: kernel + IDE disk with userland and root fs.
+run: build fs.img
 	@rm -f $(RUN_LOG)
-	@timeout $(RUN_SECS) $(QEMU) -kernel $(KERNEL) -serial stdio -display none \
-	  -no-reboot > $(RUN_LOG) 2>&1 || [ $$? -eq 124 ]
+	@timeout $(RUN_SECS) $(QEMU) -kernel $(KERNEL) -drive file=user/fs.img,index=1,if=ide,format=raw \
+	  -m 256M -serial stdio -display none -no-reboot > $(RUN_LOG) 2>&1 || [ $$? -eq 124 ]
 	@cat $(RUN_LOG)
-	@grep -q 'minios v0.1.0 (x86, rust)' $(RUN_LOG) \
+	@grep -q 'minios v0.2.0 (x86, rust)' $(RUN_LOG) \
 	  || { echo 'FAIL: banner line missing'; exit 1; }
-	@grep -q 'boot ok' $(RUN_LOG) \
-	  || { echo 'FAIL: boot ok line missing'; exit 1; }
+	@grep -q 'init: starting sh' $(RUN_LOG) \
+	  || { echo 'FAIL: shell did not start'; exit 1; }
 	@echo 'run: serial output verified'
+
+user:
+	$(MAKE) -C user
+
+fs.img: user
+	$(MAKE) -C user fs.img
 
 check:
 	cargo build --target $(TARGET)

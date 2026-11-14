@@ -21,8 +21,15 @@ pub fn init() {
     outb(COM1 + DATA, 0x01); // divisor low byte: 115200 baud
     outb(COM1 + INTERRUPT_ENABLE, 0x00); // divisor high byte
     outb(COM1 + LINE_CONTROL, 0x03); // DLAB = 0, 8 data bits, no parity
-    outb(COM1 + FIFO_CONTROL, 0xC7); // enable and clear FIFOs
+    outb(COM1 + FIFO_CONTROL, 0x07); // enable+clear FIFOs, RX trigger level 1
     outb(COM1 + MODEM_CONTROL, 0x0B); // DTR | RTS | OUT2
+                                      // Receive interrupts (uart.c: enable IRQ4 on the 16550). Line status
+                                      // 0xFF means no UART is present; leave IER off in that case.
+    if inb(COM1 + LINE_STATUS) != 0xFF {
+        outb(COM1 + INTERRUPT_ENABLE, 0x01); // received data available
+        let _ = inb(COM1 + FIFO_CONTROL); // IIR: acknowledge pending IRQ
+        let _ = inb(COM1 + DATA); // drain stale byte
+    }
 }
 
 /// Send one byte, waiting for the transmit holding register to drain.

@@ -20,7 +20,7 @@ Makefile(build/run/check)、workspace 与链接脚本定型。
 Gate（已验）：make build 零警告；qemu 串口出现 `minios v0.1.0 (x86, rust)`、`boot ok`；
 cargo fmt 通过；文件全部 ≤400 行。
 
-## M1 — xv6 功能等价（Rust 版 xv6）｜约 3–4 周
+## M1 — xv6 功能等价（Rust 版 xv6）｜🚧 核心已完成（2026-11-15）
 
 交付（批次见 03-rust-rewrite-strategy.md）：
 - 中断体系：GDT/IDT/TSS、8259、异常处理框架、PIT 100Hz、`jiffies`。
@@ -31,6 +31,10 @@ cargo fmt 通过；文件全部 ≤400 行。
 - user/：xv6 C 用户程序全集（gcc -m32）+ usertests 移植通过。
 Gate：`make run` 进入 sh；usertests 全绿；zombie/stressfs 通过；
 新增 `scripts/run-qemu.sh` 自动回归；cargo test（host 单测：string/位图/ELF 解析）绿。
+
+**2026-11-15 进度**：内核/用户态功能等价已落地 —— `make run` 进入 sh，
+usertests 输出 `ALL TESTS PASSED`，zombie/stressfs 无 panic，debug/release 零警告。
+剩余 gate：`scripts/run-qemu.sh`、host `cargo test`（详见 STATUS.md）。
 
 ## M2 — 内存管理现代化｜约 2–3 周
 

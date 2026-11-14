@@ -8,9 +8,17 @@
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
+use crate::arch::x86::mm::layout::p2v;
 use crate::io::outb;
 
-const BUFFER_ADDR: usize = 0xB8000;
+// xv6 console.c: `static ushort *crt = (ushort*)P2V(0xb8000);` — the CGA
+// memory is accessed through the kernel's KERNBASE alias. This still works
+// at boot because the multiboot trampoline's boot page directory
+// identity-maps the low 4MB AND aliases it at KERNBASE (pde[0] and
+// pde[512], see main.rs), so p2v(0xB8000) is valid from the first Rust
+// instruction; setupkvm() later keeps the same mapping via its kmap row
+// KERNBASE -> 0..EXTMEM.
+const BUFFER_ADDR: usize = p2v(0xB8000);
 pub const COLS: usize = 80;
 pub const ROWS: usize = 25;
 
@@ -81,12 +89,26 @@ pub fn clear() {
     sync_cursor();
 }
 
-/// Write a single byte, handling newline and carriage return.
+/// Write a single byte, handling newline, carriage return and backspace.
+///
+/// The backspace arm is new relative to M0: it plays the role of xv6
+/// console.c cgaputc's BACKSPACE case (console.c:114 `if(pos > 0) --pos`)
+/// so consputc(BACKSPACE) — which emits '\b', ' ', '\b' — erases correctly
+/// through this sink.
 pub fn put_byte(byte: u8) {
     match byte {
         b'\n' => newline(),
         b'\r' => {
             COL.store(0, Ordering::Relaxed);
+            sync_cursor();
+        }
+        0x08 => {
+            // backspace: move the cursor left one cell (erasure happens
+            // when the caller writes a space over it)
+            let col = COL.load(Ordering::Relaxed);
+            if col > 0 {
+                COL.store(col - 1, Ordering::Relaxed);
+            }
             sync_cursor();
         }
         _ => {

@@ -1,63 +1,48 @@
-/* minios kernel linker script: i386 ELF loaded at 1 MiB by multiboot. */
-
+/* minios kernel linker script (xv6-style layout, multiboot-loaded).
+ * Low trampoline at VMA=LMA=0x100000; kernel proper at VMA 0x80100000,
+ * loaded at physical 0x110000. */
 OUTPUT_FORMAT(elf32-i386)
-OUTPUT_ARCH(i386)
-ENTRY(_start)
+ENTRY(_low_start)
 
-KERNEL_LOAD_ADDR = 0x100000;
-BOOT_STACK_SIZE  = 16K;
+SECTIONS {
+  . = 0x100000;
+  .multiboot : { KEEP(*(.multiboot)) }   /* stays within first 8K of file */
+  .lowentry  : {
+    KEEP(*(.lowentry))
+    . = ALIGN(4096);
+    LOW_PDE = .;      . += 4096;          /* runtime-built boot page dir */
+    LOW_STACK = .;    . += 4096;          /* boot stack */
+    LOW_STACK_TOP = .;
+    LOW_MB_MAGIC = .; . += 4;
+    LOW_MB_INFO  = .; . += 4;
+    LOW_END = .;
+  }
 
-SECTIONS
-{
-    . = KERNEL_LOAD_ADDR;
+  /* Kernel proper: VMA = LMA + KERNBASE (constant offset, so the boot
+   * trampoline's single 4MB page at VMA 0x80000000 -> phys 0 covers it). */
+  . = 0x80110000;
+  KOFF = 0x80000000; /* VMA - LMA constant */
+  _kernel_start = .;
+  .text   : AT(ADDR(.text) - KOFF) { *(.text .text.*) }
+  .rodata : AT(ADDR(.rodata) - KOFF) { *(.rodata .rodata.* .srodata*) }
+  .stabs  : AT(ADDR(.stabs) - KOFF) { *(.stab .stabstr) }
+  .data   : AT(ADDR(.data) - KOFF) {
+              *(.data .data.*)
+              *(.got .got.plt)
+              . = ALIGN(4096);
+            }
+  .bss : {
+    _bss_start = .;
+    *(.bss .bss.* COMMON)
+    . = ALIGN(4096);
+    BOOT_STACK = .; . += 16384; BOOT_STACK_TOP = .;
+    _bss_end = .;
+  }
+  . = ALIGN(4096);
+  _kernel_end = .;
 
-    /* Multiboot header must appear within the first 8 KiB of the image. */
-    .multiboot : ALIGN(4096)
-    {
-        KEEP(*(.multiboot))
-    }
+  /DISCARD/ : { *(.comment) *(.eh_frame) *(.eh_frame_hdr) *(.gcc_except_table .gcc_except_table.*) *(.note*) *(.interp) *(.gnu*) }
 
-    .text : ALIGN(4096)
-    {
-        *(.text .text.*)
-    }
-
-    .rodata : ALIGN(4096)
-    {
-        *(.rodata .rodata.*)
-    }
-
-    .data : ALIGN(4096)
-    {
-        *(.data .data.*)
-        *(.got .got.plt)
-    }
-
-    .bss : ALIGN(4096)
-    {
-        __bss_start = .;
-        *(.bss .bss.*)
-        *(COMMON)
-        . = ALIGN(16);
-        boot_stack_bottom = .;
-        . += BOOT_STACK_SIZE;
-        boot_stack_top = .;
-        __bss_end = .;
-    }
-
-    _kernel_end = ALIGN(., 4096);
-
-    /DISCARD/ :
-    {
-        *(.comment)
-        *(.eh_frame .eh_frame_hdr)
-        *(.note .note.*)
-    }
-
-    ASSERT(ADDR(.text)   >= ADDR(.multiboot) + SIZEOF(.multiboot), "section overlap: .multiboot vs .text")
-    ASSERT(ADDR(.rodata) >= ADDR(.text) + SIZEOF(.text), "section overlap: .text vs .rodata")
-    ASSERT(ADDR(.data)   >= ADDR(.rodata) + SIZEOF(.rodata), "section overlap: .rodata vs .data")
-    ASSERT(ADDR(.bss)    >= ADDR(.data) + SIZEOF(.data), "section overlap: .data vs .bss")
-    ASSERT(boot_stack_top - boot_stack_bottom == BOOT_STACK_SIZE, "boot stack size mismatch")
-    ASSERT(_kernel_end <= 0x10000000, "kernel image exceeds 256 MiB")
+  ASSERT(LOW_END <= 0x110000, "low region overflows into kernel LMA")
+  ASSERT(_kernel_end - _kernel_start < 0x10000000, "kernel image too large")
 }

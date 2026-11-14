@@ -63,6 +63,31 @@ pub fn outl(port: u16, value: u32) {
     };
 }
 
+/// Read `count` u32 words from an I/O port into memory (xv6 insl).
+///
+/// LLVM's i686 backend reserves %esi, so the `rep insl` form cannot be
+/// expressed as inline asm here; a loop of `inl` is functionally identical
+/// (PIO transfers are only 128 dwords per sector).
+pub fn insl(port: u16, dst: *mut u32, count: usize) {
+    let mut i = 0;
+    while i < count {
+        // SAFETY: the caller guarantees `dst` covers `count` writable words.
+        unsafe { dst.add(i).write_volatile(inl(port)) };
+        i += 1;
+    }
+}
+
+/// Write `count` u32 words from memory to an I/O port (xv6 outsl).
+pub fn outsl(port: u16, src: *const u32, count: usize) {
+    let mut i = 0;
+    while i < count {
+        // SAFETY: the caller guarantees `src` covers `count` readable words.
+        let word = unsafe { src.add(i).read_volatile() };
+        outl(port, word);
+        i += 1;
+    }
+}
+
 /// Halt until the next interrupt arrives.
 pub fn hlt() {
     // SAFETY: `hlt` parks the CPU; with interrupts disabled it never wakes,

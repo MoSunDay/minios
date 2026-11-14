@@ -8,3 +8,7 @@
 *.bin
 *.elf
 *.map
+
+# in-tree build products
+/tools/mkfs
+/user/_*

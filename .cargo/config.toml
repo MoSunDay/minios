@@ -8,10 +8,14 @@ target = "i686-unknown-linux-gnu"
 
 [target.i686-unknown-linux-gnu]
 linker = "gcc"
+# SSE/SSE2 stay at the i686 target default: rustc requires sse2 for the
+# target ABI. The boot trampoline enables CR4.OSFXSR before Rust runs.
 rustflags = [
+    "-C", "relocation-model=static",
     "-C", "link-arg=-Tkernel/x86-minios.ld",
     "-C", "link-arg=-nostartfiles",
     "-C", "link-arg=-nostdlib",
     "-C", "link-arg=-static",
+    "-C", "link-arg=-no-pie",
     "-C", "link-arg=-Wl,--build-id=none",
 ]
