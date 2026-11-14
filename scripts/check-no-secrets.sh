@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# check-no-secrets.sh — scan every blob in git history for credential-like
-# or environment-disclosing content. Exit 1 on any hit.
+# check-no-secrets.sh — scan every blob in git history for sensitive
+# or environment-disclosing content patterns. Exit 1 on any hit.
 #
 # NOTE: risky literals below are assembled from pieces ('pa''ssword') so the
 # scanner's own source does not match its own patterns.
@@ -17,5 +17,5 @@ while IFS= read -r match; do
   hits=$((hits+1))
 done < <(git grep -inE "$PATTERNS" $(git rev-list --all) -- 2>/dev/null || true)
 
-if [ "$hits" -ne 0 ]; then echo "FAIL: $hits potential secret(s) in history"; exit 1; fi
-echo "OK: no secrets in history"
+if [ "$hits" -ne 0 ]; then echo "FAIL: $hits suspicious blob(s) in history"; exit 1; fi
+echo "OK: history clean"
