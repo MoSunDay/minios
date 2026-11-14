@@ -6,7 +6,6 @@
 //!   namei(path) -> *mut Inode; ilock/iput/iunlockput(ip);
 //!   readi(ip, dst, off, n) -> i32 (n on success, <0/short on failure).
 
-use core::mem::{size_of, zeroed};
 use core::ptr::null_mut;
 
 use crate::arch::x86::mm::layout::p2v;
@@ -14,48 +13,9 @@ use crate::arch::x86::mm::pgtable as vm;
 use crate::fs::xv6fs::inode::{ilock, iunlockput, readi};
 use crate::fs::xv6fs::namei::namei;
 use crate::kernel::sched::{myproc, MAXARG, PTE_ADDR};
+use crate::lib::elf::{parse_ehdr, parse_phdr, valid_magic, EHDR_SIZE, ELF_PROG_LOAD, PHDR_SIZE};
 use crate::lib::string::{safestrcpy, strlen};
 use crate::mm::frame::PGSIZE;
-
-/// elf.h: must equal 0x464C457F ("\x7FELF" little endian).
-pub const ELF_MAGIC: u32 = 0x464C_457F;
-/// elf.h: Proghdr type == loadable segment.
-pub const ELF_PROG_LOAD: u32 = 1;
-
-/// elf.h `struct elfhdr` (ELF32 image header), repr(C) identical layout.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Elf32_Ehdr {
-    pub magic: u32, // must equal ELF_MAGIC
-    pub e_ident: [u8; 12],
-    pub type_: u16,
-    pub machine: u16,
-    pub version: u32,
-    pub entry: u32, // where the program starts
-    pub phoff: u32, // program header table offset
-    pub shoff: u32,
-    pub flags: u32,
-    pub ehsize: u16,
-    pub phentsize: u16,
-    pub phnum: u16, // number of program headers
-    pub shentsize: u16,
-    pub shnum: u16,
-    pub shstrndx: u16,
-}
-
-/// elf.h `struct proghdr` (program-section header).
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Elf32_Phdr {
-    pub type_: u32,
-    pub off: u32,   // Offset of segment in file
-    pub vaddr: u32, // Virtual address in memory
-    pub paddr: u32,
-    pub filesz: u32, // Size of segment in file
-    pub memsz: u32,  // Size of segment in memory (bigger than filesz -> bss)
-    pub flags: u32,
-    pub align: u32,
-}
 
 /// vm.c loaduvm(): load a program segment into the page table at va.
 /// Returns 0 on success, -1 on failure.
@@ -113,21 +73,17 @@ pub unsafe fn exec(path: *const u8, argv: &[*const u8]) -> i32 {
     let mut pgdir: *mut u32 = null_mut();
 
     let ok = 'body: {
-        // Check ELF header.
-        // SAFETY: zeroed ELF structs are valid all-zero POD.
-        let mut elf: Elf32_Ehdr = unsafe { zeroed() };
-        if unsafe {
-            readi(
-                ip,
-                &mut elf as *mut Elf32_Ehdr as *mut u8,
-                0,
-                size_of::<Elf32_Ehdr>() as u32,
-            )
-        } < size_of::<Elf32_Ehdr>() as i32
-        {
+        // Read + parse the ELF header.
+        let mut ehdr_buf = [0u8; EHDR_SIZE];
+        // SAFETY: readi writes at most EHDR_SIZE bytes into ehdr_buf.
+        if unsafe { readi(ip, ehdr_buf.as_mut_ptr(), 0, EHDR_SIZE as u32) } != EHDR_SIZE as i32 {
             break 'body false;
         }
-        if elf.magic != ELF_MAGIC {
+        let elf = match parse_ehdr(&ehdr_buf) {
+            Some(e) => e,
+            None => break 'body false,
+        };
+        if !valid_magic(&elf) {
             break 'body false;
         }
 
@@ -141,20 +97,18 @@ pub unsafe fn exec(path: *const u8, argv: &[*const u8]) -> i32 {
         let mut sz: u32 = 0;
         let mut off = elf.phoff;
         for _ in 0..elf.phnum {
-            // SAFETY: zeroed Phdr is valid all-zero POD.
-            let mut ph: Elf32_Phdr = unsafe { zeroed() };
-            if unsafe {
-                readi(
-                    ip,
-                    &mut ph as *mut Elf32_Phdr as *mut u8,
-                    off,
-                    size_of::<Elf32_Phdr>() as u32,
-                )
-            } != size_of::<Elf32_Phdr>() as i32
+            let mut phdr_buf = [0u8; PHDR_SIZE];
+            // SAFETY: readi writes at most PHDR_SIZE bytes into phdr_buf.
+            if unsafe { readi(ip, phdr_buf.as_mut_ptr(), off, PHDR_SIZE as u32) }
+                != PHDR_SIZE as i32
             {
                 break 'body false;
             }
-            off += size_of::<Elf32_Phdr>() as u32;
+            let ph = match parse_phdr(&phdr_buf) {
+                Some(p) => p,
+                None => break 'body false,
+            };
+            off += PHDR_SIZE as u32;
             if ph.type_ != ELF_PROG_LOAD {
                 continue;
             }

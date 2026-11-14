@@ -7,7 +7,9 @@
 # scanner's own source does not match its own patterns.
 set -euo pipefail
 
-KW1='pass''word|pass''wd|se''cret|to''ken|cre''dential'
+# Keyword-looking identifiers only matter as assignments/values; bare words
+# such as xv6's gettoken() or prose 'address token' are not credentials.
+KW1='\b(pass''word|pass''wd|se''cret|to''ken|cre''dential|api[_-]?key)\b[[:space:]]*[:=][[:space:]]*[^[:space:]]+'
 KW2='PRIVATE''[[:space:]]KEY|BEGIN (RSA|OPENSSH|EC|DSA)'
 KW3='ssh-''rsa[[:space:]]AAAA|ssh-''ed25519[[:space:]]AAAA'
 PATTERNS="(${KW1}|${KW2}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|xox[baprs]-|/root/[a-z]|/home/[a-z]+/|/Users/[a-z]|${KW3})"

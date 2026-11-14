@@ -3,5 +3,9 @@
 version = 4
 
 [[package]]
+name = "minios-host-tests"
+version = "0.1.0"
+
+[[package]]
 name = "minios-kernel"
 version = "0.1.0"

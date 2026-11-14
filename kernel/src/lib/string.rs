@@ -7,7 +7,7 @@
 ///
 /// (string.c:5 — the 4-byte `stosl` fast path is kept, written as plain
 /// stores instead of inline `rep stosl`.)
-#[no_mangle]
+#[cfg_attr(not(test), no_mangle)]
 pub extern "C" fn memset(dst: *mut u8, c: i32, n: usize) -> *mut u8 {
     let c = (c & 0xFF) as u8;
     // SAFETY: caller guarantees [dst, dst+n) is writable.
@@ -35,7 +35,7 @@ pub extern "C" fn memset(dst: *mut u8, c: i32, n: usize) -> *mut u8 {
 }
 
 /// memmove: copy `n` bytes, safe when the regions overlap (string.c:24).
-#[no_mangle]
+#[cfg_attr(not(test), no_mangle)]
 pub extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     // SAFETY: caller guarantees [dst, dst+n) writable and [src, src+n)
     // readable; the backward loop below handles src < dst < src+n overlap.
@@ -67,14 +67,14 @@ pub extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
 }
 
 /// memcpy exists to placate GCC; use memmove (string.c:45).
-#[no_mangle]
+#[cfg_attr(not(test), no_mangle)]
 pub extern "C" fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     memmove(dst, src, n)
 }
 
 /// memcmp: bytewise compare, `*s1 - *s2` of the first differing byte
 /// (string.c:13).
-#[no_mangle]
+#[cfg_attr(not(test), no_mangle)]
 pub extern "C" fn memcmp(v1: *const u8, v2: *const u8, n: usize) -> i32 {
     // SAFETY: caller guarantees n readable bytes at each pointer.
     unsafe {
@@ -146,7 +146,7 @@ pub fn safestrcpy(s: *mut u8, t: *const u8, n: i32) -> *mut u8 {
 }
 
 /// strlen: count bytes before the NUL (string.c:90). xv6 returns `int`.
-#[no_mangle]
+#[cfg_attr(not(test), no_mangle)]
 pub extern "C" fn strlen(s: *const u8) -> usize {
     // SAFETY: caller guarantees NUL-terminated string.
     unsafe {

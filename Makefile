@@ -9,7 +9,7 @@ QEMU     := qemu-system-i386
 RUN_SECS := 10
 RUN_LOG  := /tmp/minios-run.log
 
-.PHONY: all build run run-debug user fs.img check fmt clean
+.PHONY: all build run run-debug user fs.img check test test-qemu fmt clean
 
 all: build fs.img
 
@@ -36,6 +36,12 @@ fs.img: user
 
 check:
 	cargo build --target $(TARGET)
+
+test:
+	cargo test -p minios-host-tests --target x86_64-unknown-linux-gnu
+
+test-qemu:
+	./scripts/run-qemu.sh --usertests
 
 fmt:
 	cargo fmt

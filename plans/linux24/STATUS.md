@@ -4,16 +4,16 @@
 
 ## 总体进度
 
-- 当前里程碑：**M1 核心已完成，gate 收尾中**（run-qemu.sh、host cargo test 待补）
-- 总体自估：**22%**（M0 ✅；M1 内核/用户态功能等价已跑通，余 2 项 gate）
-- 最近更新：2026-11-15（Rust 版 xv6 状态翻译落地，usertests 全绿）
+- 当前里程碑：**M1 ✅ done；下一里程碑 M2（内存管理现代化）**
+- 总体自估：**25%**（M0/M1 完成，8 个里程碑口径）
+- 最近更新：2026-11-14（M1 gate 全绿：脚本化 qemu 回归 + host 单测）
 
 ## 里程碑状态
 
 | 里程碑 | 内容 | 状态 | 证据（gate） |
 |--------|------|------|--------------|
 | M0 | Rust 引导骨架（multiboot + VGA/串口 + panic） | ✅ done | qemu 串口 banner；make build 零警告 |
-| M1 | xv6 功能等价移植（中断/分页/进程/系统调用/IDE/文件读写） | 🟡 core done | `make run` 进入 sh；usertests `ALL TESTS PASSED`；zombie/stressfs 通过 |
+| M1 | xv6 功能等价移植（中断/分页/进程/系统调用/IDE/文件读写） | ✅ done | `make run` 进入 sh；usertests `ALL TESTS PASSED`；`make test` 4/4；`make test-qemu` 判绿 |
 | M2 | 内存管理现代化（buddy/slab/vmalloc/percpu） | ⬜ pending | |
 | M3 | 调度与内核基础设施（O(n)/内核线程/软中断/信号/定时器） | ⬜ pending | |
 | M4 | VFS + 块层（dcache/page cache/请求队列/procfs） | ⬜ pending | |
@@ -40,6 +40,10 @@
 3. 日志协议：统一为 xv6-public 单事务 `busy` 协议（begin_op/end_op/log_write），
    修复并发写目录块导致的 inode 类型损坏。
 4. 警告清零：128 → 0（debug/release），未使用项按“头文件常量/待用适配器”逐条说明或删除。
+5. 可移植代码抽出：`lib/bitmap.rs`（越界安全位操作）、`lib/elf.rs`（ELF32 头解析）；
+   `exec` 改为读字节 + `parse_ehdr/parse_phdr`，去掉 zeroed 结构体强转。
+6. host 单测用 `#[path]` 引入真实内核模块（非副本）；`cfg(test)` 关闭 `#[no_mangle]`
+   避免与宿主 libc 冲突。`scripts/run-qemu.sh` 按串口日志判绿并自动退出。
 
 ## Go-Live Gate（仓库级常绿清单）
 
@@ -49,8 +53,8 @@
 | make run 冒烟通过 | 🟢 | 串口 banner `minios v0.2.0` + `init: starting sh` 校验 |
 | cargo fmt --check | 🟢 | |
 | 无二进制入库 | 🟢 | `scripts/check-no-binaries.sh` / `check-no-secrets.sh` 通过 |
-| 单元测试 | 🔴 | host cargo test（string/位图/ELF 解析）尚未建立 |
-| 集成测试（qemu 脚本化） | 🟡 | usertests/zombie/stressfs 已手工跑通；`scripts/run-qemu.sh` 待补 |
+| 单元测试 | 🟢 | `make test`：4 tests（string/bitmap/ELF），零 warning |
+| 集成测试（qemu 脚本化） | 🟢 | `scripts/run-qemu.sh --smoke` / `--usertests`（`make test-qemu`） |
 | 文件行数 ≤400（新增内核源） | 🟢 | 内核最长 399 行（console.rs）；user/ 为 xv6 上游测试源 |
 | usertests 全绿 | 🟢 | bigarg…bigdir/exec，`ALL TESTS PASSED` |
 
@@ -63,6 +67,6 @@
 
 ## 下一步
 
-1. 补 `scripts/run-qemu.sh`：自动启动 qemu、注入 `usertests`、按日志判绿并退出。
-2. 建立 host `cargo test`：lib/string、位图（balloc/bmap 纯函数部分）、ELF 解析。
-3. M1 gate 全绿后进入 M2：bootmem 区间登记 + buddy + slab，保持 usertests 回归。
+1. M2 起步：bootmem 区间登记（multiboot mmap → memblock 风格保留/释放）。
+2. buddy order 0–10 + 每 CPU 单页缓存；slab 通用/专用 cache，接入 `kmalloc/kfree`。
+3. 为 buddy/slab 增加 host 单测（分配释放、碎片注入），并用 `make test-qemu` 保持 usertests 回归。

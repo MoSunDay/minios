@@ -1,0 +1,13 @@
+[package]
+name = "minios-host-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Host-side unit tests for minios portable kernel modules"
+
+[lib]
+name = "minios_host_tests"
+path = "src/lib.rs"
+
+# Zero external dependencies by design.
+[dependencies]
