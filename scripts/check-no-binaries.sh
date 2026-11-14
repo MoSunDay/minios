@@ -4,14 +4,14 @@
 set -euo pipefail
 
 MAX_TEXT_BYTES=1048576  # 1 MiB cap even for allowed text types
-ALLOW='^(.*\.(rs|c|h|S|s|ld|toml|lock|md|txt|sh|py|pl|json|yml|yaml|gitignore|gdbinit|dic|patch|diff|expect|ldscript)|\.gitignore|\.cargo/.*|Makefile|LICENSE|README|BUGS|Notes)$'
+ALLOW='\.(rs|c|h|S|s|ld|toml|lock|md|txt|sh|py|pl|json|yml|yaml|patch|diff|expect)$|(^|/)(\.gitignore|\.cvsignore|Makefile|LICENSE|README[^/]*|BUGS|Notes)$'
 
 bad=0
 while IFS= read -r line; do
-  size=$(echo "$line" | awk '{print $1}')
-  path=$(echo "$line" | cut -d' ' -f2-)
-  [ -z "${path:-}" ] && continue
-  if ! echo "/$path" | grep -qiE "$ALLOW"; then
+  size=${line%% *}
+  path=${line#* }
+  [ -z "$path" ] && continue
+  if ! printf '%s' "$path" | grep -qiE "$ALLOW"; then
     echo "VIOLATION(non-allowlist): $path ($size bytes)"; bad=1
   elif [ "$size" -gt "$MAX_TEXT_BYTES" ]; then
     echo "VIOLATION(>1MiB text): $path ($size bytes)"; bad=1
