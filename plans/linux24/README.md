@@ -46,7 +46,7 @@ ext4 阶段另需 e2fsprogs（mke2fs/debugfs/e2fsck，开发机已具备）。
 ## 仓库定位
 
 - **minios（本仓库）**：Rust 内核 + 计划 + 测试，全新历史、无二进制。
-- **xv6（MoSunDay/xv6）**：MIT xv6-public C 实现，作为**只读语义参考**，不导入其历史；
+- **xv6 参考副本（MoSunDay/xv6 的本地克隆）**：MIT xv6-public C 实现，作为**只读语义参考**，不导入其历史；
   其 848 个提交中含 13.1MB 二进制（pdf/ps/ppt/tar.gz），如需公开该仓库可按附录流程净化。
 
 ## 命名

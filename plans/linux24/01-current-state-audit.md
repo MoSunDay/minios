@@ -1,6 +1,6 @@
 # 01 — 基线审计（xv6 现状 + 环境实测，2026-11-14）
 
-## 1. xv6 代码盘点（xv6 @ 2305a8c "Create mkfs.c"）
+## 1. xv6 代码盘点（MoSunDay/xv6 @ 2305a8c "Create mkfs.c"）
 
 - 规模：**101 个文件，约 9,425 行**（C/H/S）；全部平铺根目录，无分层。
 - 定位：MIT xv6-public（x86, 2011 教材版）。无 VFS、无 page cache、无 IPC/信号、
@@ -28,7 +28,7 @@ mknod unlink link mkdir close —— minios M1 目标：全部等价提供（同
 
 - gcc 11.4 下 `mkfs.c` 编译失败：`static_assert` 重定义 × `-Werror`（glibc assert.h 冲突）。
   minios 的 mkfs 以 Rust 重写或加守卫，见 30-ext4.md。
-- xv6 内核本体开发环境可链接（kernel ELF 142KB）；qemu-system-i386 可用。
+- xv6 内核在开发环境可链接（kernel ELF 142KB）；qemu-system-i386 可用。
 
 ## 3. xv6 git 历史二进制盘点（任务 1 依据）
 
@@ -47,7 +47,7 @@ mknod unlink link mkdir close —— minios M1 目标：全部等价提供（同
 | qemu-system-i386 | ✅ |
 | gcc 11.4（-m32 可用）/ ld | ✅ 供 xv6 C 用户程序对照构建 |
 | mke2fs / debugfs / e2fsck / dumpe2fs | ✅ ext4 测试闭环关键依赖 |
-| 网络 | github HTTPS 不可用；SSH 认证可用（MoSunDay）；pypi/rustup 直连可用 |
+| 网络 | 受限环境：HTTPS 到 GitHub 不可用，推送/克隆统一 SSH；rustup/pypi 直连可用 |
 
 ## 5. minios 起点（M0 已完成）
 
