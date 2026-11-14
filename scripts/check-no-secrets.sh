@@ -2,7 +2,8 @@
 # check-no-secrets.sh — scan every blob in git history for sensitive
 # or environment-disclosing content patterns. Exit 1 on any hit.
 #
-# NOTE: risky literals below are assembled from pieces ('pa''ssword') so the
+# NOTE: this scanner excludes its own path (its filename/patterns
+# would otherwise match themselves); risky literals below are split ('pa''ssword') so the
 # scanner's own source does not match its own patterns.
 set -euo pipefail
 
@@ -15,7 +16,7 @@ hits=0
 while IFS= read -r match; do
   echo "VIOLATION: $match"
   hits=$((hits+1))
-done < <(git grep -inE "$PATTERNS" $(git rev-list --all) -- 2>/dev/null || true)
+done < <(git grep -inE "$PATTERNS" $(git rev-list --all) -- ':(exclude)scripts/check-no-secrets.sh' 2>/dev/null || true)
 
 if [ "$hits" -ne 0 ]; then echo "FAIL: $hits suspicious blob(s) in history"; exit 1; fi
 echo "OK: history clean"
