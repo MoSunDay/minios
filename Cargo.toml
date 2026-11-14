@@ -1,0 +1,16 @@
+# minios workspace root.
+
+[workspace]
+resolver = "2"
+members = ["kernel"]
+
+# Profiles must live at the workspace root: cargo ignores member profiles.
+[profile.dev]
+opt-level = 1
+panic = "abort"
+
+[profile.release]
+opt-level = 2
+panic = "abort"
+lto = true
+codegen-units = 1

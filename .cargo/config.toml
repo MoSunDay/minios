@@ -1,0 +1,17 @@
+# Cargo configuration for the minios kernel workspace.
+#
+# The linker script path is resolved relative to the directory cargo is
+# invoked from, so build from the workspace root (or use `make build`).
+
+[build]
+target = "i686-unknown-linux-gnu"
+
+[target.i686-unknown-linux-gnu]
+linker = "gcc"
+rustflags = [
+    "-C", "link-arg=-Tkernel/x86-minios.ld",
+    "-C", "link-arg=-nostartfiles",
+    "-C", "link-arg=-nostdlib",
+    "-C", "link-arg=-static",
+    "-C", "link-arg=-Wl,--build-id=none",
+]

@@ -1,0 +1,10 @@
+# Build artifacts; never commit binaries.
+/target
+*.o
+*.d
+*.a
+*.img
+*.iso
+*.bin
+*.elf
+*.map

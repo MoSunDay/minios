@@ -1,0 +1,13 @@
+[package]
+name = "minios-kernel"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "minios x86 32-bit kernel skeleton (M0)"
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+# Zero external dependencies by design.
+[dependencies]
