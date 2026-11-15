@@ -4,6 +4,9 @@
 #   scripts/run-qemu.sh                 smoke: expect banner + shell prompt
 #   scripts/run-qemu.sh --usertests     boot, run usertests, judge ALL TESTS PASSED
 #
+# --no-build skips only the kernel build; --usertests always rebuilds
+# user/fs.img even with --no-build, because usertests creates usertests.ran
+# and mutates the image, so mkfs must start from a clean image.
 # QEMU's serial console is a FIFO in this script (not stdio), so the test
 # command is injected only after the shell prompt appears. The script polls the
 # serial log and exits as soon as the expected line arrives; no fixed sleep
@@ -19,7 +22,7 @@ DO_BUILD=1
 KERNEL=""
 
 usage() {
-    sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
     printf 'options: --usertests --smoke --timeout SECS --no-build --kernel PATH\n'
 }
 
@@ -37,12 +40,13 @@ done
 
 command -v qemu-system-i386 >/dev/null || { echo 'qemu-system-i386 not found' >&2; exit 1; }
 
-if [ "$DO_BUILD" = 1 ]; then
-    make -s build
-    if [ "$MODE" = usertests ]; then
-        # usertests creates usertests.ran; mkfs must start from a clean image.
-        rm -f user/fs.img
-    fi
+if [ "$DO_BUILD" = 1 ]; then make -s build; fi
+if [ "$MODE" = usertests ]; then
+    # usertests creates usertests.ran; mkfs must start from a clean image.
+    # Runs even with --no-build: --no-build skips the kernel build only.
+    rm -f user/fs.img
+    make -s fs.img
+elif [ "$DO_BUILD" = 1 ]; then
     make -s fs.img
 fi
 

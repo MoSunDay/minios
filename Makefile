@@ -1,5 +1,6 @@
 # minios top-level Makefile.
 
+HOST_TARGET := $(shell rustc -vV 2>/dev/null | sed -n 's/^host: //p')
 TARGET   := i686-unknown-linux-gnu
 # Honor CARGO_TARGET_DIR / global cargo config instead of assuming ./target.
 TARGET_DIR := $(shell cargo metadata --format-version 1 --no-deps 2>/dev/null \
@@ -37,8 +38,10 @@ fs.img: user
 check:
 	cargo build --target $(TARGET)
 
+# Host unit tests run on the machine's rustc host triple (auto-detected via
+# `rustc -vV`) instead of assuming x86_64-unknown-linux-gnu.
 test:
-	cargo test -p minios-host-tests --target x86_64-unknown-linux-gnu
+	cargo test -p minios-host-tests --target $(HOST_TARGET)
 
 test-qemu:
 	./scripts/run-qemu.sh --usertests

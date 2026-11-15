@@ -6,7 +6,7 @@
 
 - 当前里程碑：**M1 ✅ done；下一里程碑 M2（内存管理现代化）**
 - 总体自估：**25%**（M0/M1 完成，8 个里程碑口径）
-- 最近更新：2026-11-14（M1 gate 全绿：脚本化 qemu 回归 + host 单测）
+- 最近更新：2026-11-15（M1 收尾：host 三元组自动探测、usertests 强制重建 fs.img、引号键密钥匹配）
 
 ## 里程碑状态
 
@@ -44,6 +44,9 @@
    `exec` 改为读字节 + `parse_ehdr/parse_phdr`，去掉 zeroed 结构体强转。
 6. host 单测用 `#[path]` 引入真实内核模块（非副本）；`cfg(test)` 关闭 `#[no_mangle]`
    避免与宿主 libc 冲突。`scripts/run-qemu.sh` 按串口日志判绿并自动退出。
+7. M1 收尾：`make test` 改用 `rustc -vV` 自动探测宿主三元组（不再假设 x86_64）；
+   `run-qemu.sh --usertests` 无条件重建 fs.img（`--no-build` 仅跳过内核构建）；
+   `check-no-secrets.sh` 关键字赋值匹配支持带引号键（JSON/YAML）。
 
 ## Go-Live Gate（仓库级常绿清单）
 
