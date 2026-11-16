@@ -1,15 +1,14 @@
 # STATUS — x86_64 / Linux 2.6.39.4 实施状态
 
 > 本文件只报告实施与证据状态。**计划文档终审完成不等于实现完成，也不使任何 gate 变绿。**
-> x86_64/Rust-only 迁移已启动：M0R 代码与 runner 已落地并在真实 QEMU 冒烟全绿（见下），
-> 但**取证工作树为 dirty，尚不构成正式 gate 证据**；验收规则以
-> [40-testing-ci.md](40-testing-ci.md) 为唯一权威。
+> x86_64/Rust-only 迁移已启动：M0R 已在净树本地取证与 GitHub CI 首跑双重全绿（见下）；
+> 验收规则以 [40-testing-ci.md](40-testing-ci.md) 为唯一权威。
 
 ## Rollup
 
 | 范围 | 当前状态 | 判定 |
 |------|----------|------|
-| Core-2.6（M0R–M8） | ⬜ **pending**（M0R 实现+冒烟+工具锁+CI 接线完成） | M0R 冒烟绿仅在 dirty tree 取得；还需干净 commit 取证 + CI 首次绿后才能判 M0R 绿 |
+| Core-2.6（M0R–M8） | 🟢 M0R done（M1R–M8 pending） | M0R 净树取证全绿（HEAD `4c22b7b`，内核 sha256 `8aacf344…`）+ CI 首跑 success（run #1，全部 14 步绿）；证据见下文 M0R 现状 |
 | Parity-2.6（M9+） | ⬜ **pending** | 未启动；权威差距表、Parity 配置和外部矩阵均未验收 |
 
 最近同步：2026-11-16。唯一实现基线为 Linux 2.6.39.4 / x86_64；不沿用旧完成度或工期。
@@ -18,7 +17,7 @@
 
 | 里程碑 | 交付摘要 | 状态 | 当前证据/前置 |
 |--------|----------|------|---------------|
-| M0R | 工具锁、Multiboot1/ELF64、长模式、高半区、真实 QEMU smoke、CI workflow | 🟡 **实现完成，待取证**（剩净树取证 + CI 首跑） | 见下文 M0R 现状 |
+| M0R | 工具锁、Multiboot1/ELF64、长模式、高半区、真实 QEMU smoke、CI workflow | 🟢 **done**（2026-11-16 判绿） | 净树 HEAD `4c22b7b` 全套 exit 0 + 三组 sha256 + CI 首跑 success：https://github.com/MoSunDay/minios/actions/runs/43886738739 |
 | M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | ⬜ **pending** | 等 M0R 全绿；旧 C usertests 不计 |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | ⬜ pending | 等 M1R 全绿 |
 | M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE | ⬜ pending | 等 M2 全绿 |
@@ -42,9 +41,9 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
 - Core 与 External Parity 分开汇总。Parity 验收前必须重验 Core；in-scope 失败、skip、TCONF
   或 XFAIL 均阻断，out-of-scope 只能引用事先接受的 ADR。
 
-## M0R 现状（2026-11-16，dirty tree，尚非正式证据）
+## M0R 现状（2026-11-16，净树取证 + CI 首跑双绿，已判 🟢）
 
-已完成（`make all`、`make test-qemu-smoke`、`make test` 全绿）：
+实现与冒烟（正式净树证据见下两节）：
 
 1. 工具链锁定 Rust `1.97.1`（`rust-toolchain.toml`），`x86_64-unknown-none` 已安装，
    构建使用 rust-lld 与 `kernel/x86_64-minios.ld`（ELF64 低 boot block + 高半区）。
@@ -61,9 +60,25 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
 
 1. ~~在干净 commit 上重跑全套命令产出正式证据~~ → **已完成**，见下方净树取证记录
    （2026-11-16，HEAD `4c22b7b`，全套退出 0）。
-2. CI job（`.github/workflows/ci.yml`，M0R 到期集合：build + 静态布局 gate + host 测试 +
-   `test-qemu-smoke` + secret/no-binary 扫描 + fmt-check）已接线并在本地等价验证，但
-   尚未在 GitHub 上跑过首次绿；push 属需授权操作。
+2. ~~CI 首次绿~~ → **已完成**：run #1（push 事件，HEAD `d045142`）结论 success，
+   12 个业务步骤 + 上传证据 artifact 全绿：
+   https://github.com/MoSunDay/minios/actions/runs/43886738739
+
+### CI 首跑取证记录（2026-11-16，判绿依据之二）
+
+- Run：`core-ci` #1，event=push，HEAD `d045142b79f61716d4000a2c480ff389df7b287f`，
+  runner `ubuntu-22.04`，结论 **success**（全部步骤含 Post/Complete 均 success）。
+- URL：https://github.com/MoSunDay/minios/actions/runs/43886738739
+- 关键步骤在线验证：
+  - `Guard: rust-toolchain.toml still pinned to 1.97.1` 与
+    `Rust toolchain (pinned 1.97.1, matching rust-toolchain.toml)` 双 success
+    ——评审 P0 缺陷（缺 `with:`）修复被线上证实；
+  - 冻结快照 apt 安装（四包精确 `=版本` 钉死）success——假设 2（快照 deb 可下载）闭环；
+  - `make all`/`make test`/`make test-qemu-smoke` 在 CI 复现本地同判绿（exit 33 +
+    协议 verdict PASS）——假设 3（CI target 目录）闭环；`ubuntu-22.04` 可用——假设 1 闭环；
+  - kernel ELF/ISO/serial.log/verdict 已作为 artifact `m0r-evidence` 上传（30 天保留）。
+- 判绿合成：净树本地证据（上节）+ CI 外部环境复现 → 40-testing-ci.md 要求的双重环境
+  一致取证成立，**M0R 判 🟢**。
 
 ### 净树取证记录（2026-11-16，正式证据）
 
