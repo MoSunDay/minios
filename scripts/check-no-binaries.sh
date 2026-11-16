@@ -4,7 +4,7 @@
 set -euo pipefail
 
 MAX_TEXT_BYTES=1048576  # 1 MiB cap even for allowed text types
-ALLOW='\.(rs|c|h|S|s|ld|toml|lock|md|txt|sh|py|pl|json|yml|yaml|patch|diff|expect)$|(^|/)(\.gitignore|\.cvsignore|Makefile|LICENSE|README[^/]*|BUGS|Notes)$'
+ALLOW='\.(rs|c|h|S|s|ld|toml|lock|md|txt|sh|py|pl|json|yml|yaml|patch|diff|expect|cfg)$|(^|/)(\.gitignore|\.cvsignore|Makefile|LICENSE|README[^/]*|BUGS|Notes)$'
 
 bad=0
 while IFS= read -r line; do
