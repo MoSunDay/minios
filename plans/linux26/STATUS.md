@@ -59,11 +59,31 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
 
 待办（阻断 M0R 判绿）：
 
-1. 在干净 commit（`git status` 为空）上重跑 `make all test test-qemu-smoke` 产出正式
-   证据；当前工作树 dirty，本轮结果仅算调试证据。
+1. ~~在干净 commit 上重跑全套命令产出正式证据~~ → **已完成**，见下方净树取证记录
+   （2026-11-16，HEAD `4c22b7b`，全套退出 0）。
 2. CI job（`.github/workflows/ci.yml`，M0R 到期集合：build + 静态布局 gate + host 测试 +
    `test-qemu-smoke` + secret/no-binary 扫描 + fmt-check）已接线并在本地等价验证，但
    尚未在 GitHub 上跑过首次绿；push 属需授权操作。
+
+### 净树取证记录（2026-11-16，正式证据）
+
+- HEAD：`4c22b7b3ab6118a8d13f19397d42272c0fe1aa92`（`git status --porcelain` 输出为空，
+  取证当日无 dirty 文件）。
+- 命令链（全部退出 0，按 40-testing-ci.md §3/§4 到期集合）：
+  `CARGO_HOME=/tmp/minios-cargo-home make fmt-check && make all && make test &&
+  make test-qemu-smoke && scripts/check-no-secrets.sh && scripts/check-no-binaries.sh`。
+- 协议行：`MINIOS_X86_64_TEST_PASS_V1 suite=m0r run=core-up total=6 passed=6 failed=0
+  skipped=0`；`exit_code=Some(33) timed_out=false`；
+  `verdict: PASS suite=m0r run=core-up config_id=CORE-UP-GRUB`。
+- sha256（`sha256sum` 原样输出；kernel 与此前 dirty 轮一致，符合 40 §1.1 内核不变则
+  hash 不变规则；ISO 含 mkisofs 时间戳、逐轮记录）：
+  - `8aacf344361b0eab84a26787882950f50c1fb8bf1f4b3113ca96b4a1a26ac5cd  target/x86_64-unknown-none/release/kernel`
+  - `1c65e9ba541e756355ef2f2f765d5924f6022660526b65691fa85f30455e1a4e  target/m0r-iso/minios-m0r.iso`
+  - `71f9cf197d093eb63fe48fcad93277099e2617b6a20e436eff8ff2f8bd605adf  target/m0r-run/serial.log`
+- 本轮修复：`scripts/check-no-binaries.sh` 文本扩展白名单补 `cfg`（首次入库的
+  `scripts/m0r-grub-early.cfg` 为 ASCII 文本，原白名单缺口误报）；`.github/workflows/ci.yml`
+  工具链步骤补 `with: toolchain/components/targets` + rust-toolchain.toml 漂移守卫
+  （评审 P0 缺陷，dtolnay action 不读 toml 且 `toolchain` 为必填输入）。
 
 2026-11-16 本轮增量（工具锁与 CI 接线，均已在本地验证）：
 
