@@ -12,3 +12,4 @@
 # in-tree build products
 /tools/mkfs
 /user/_*
+link_repos

@@ -9,3 +9,7 @@ version = "0.1.0"
 [[package]]
 name = "minios-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "minios-runner"
+version = "0.1.0"

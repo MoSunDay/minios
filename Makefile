@@ -1,54 +1,77 @@
-# minios top-level Makefile.
+# minios top-level Makefile: x86_64 Core (M0R).
 
+# Host triple for host-side crates (runner, host tests); the kernel target is
+# pinned by .cargo/config.toml (x86_64-unknown-none).
 HOST_TARGET := $(shell rustc -vV 2>/dev/null | sed -n 's/^host: //p')
-TARGET   := i686-unknown-linux-gnu
-# Honor CARGO_TARGET_DIR / global cargo config instead of assuming ./target.
+
+# rust-lld ships inside the toolchain sysroot; keep it on PATH for cargo.
+TOOLCHAIN_BIN := $(shell rustc --print sysroot 2>/dev/null)/lib/rustlib/$(HOST_TARGET)/bin
+export PATH := $(TOOLCHAIN_BIN):$(PATH)
+
 TARGET_DIR := $(shell cargo metadata --format-version 1 --no-deps 2>/dev/null \
                | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
-KERNEL   := $(TARGET_DIR)/$(TARGET)/release/kernel
-QEMU     := qemu-system-i386
-RUN_SECS := 10
-RUN_LOG  := /tmp/minios-run.log
+KERNEL   := $(TARGET_DIR)/x86_64-unknown-none/release/kernel
+RUNNER   := cargo run --offline -q -p minios-runner --target $(HOST_TARGET) --
 
-.PHONY: all build run run-debug user fs.img check test test-qemu fmt clean
+# CORE-UP-GRUB image pieces (ADR-0014; frozen in plans/linux26/40).
+GRUB_CFG := scripts/m0r-grub-early.cfg
+ISO_DIR  := $(TARGET_DIR)/m0r-iso
+ISO      := $(ISO_DIR)/minios-m0r.iso
+RUN_DIR  := $(TARGET_DIR)/m0r-run
+GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial echo boot search memdisk
 
-all: build fs.img
+.PHONY: all build check-layout m0r-iso test-qemu-smoke run-smoke test test-host fmt fmt-check \
+        clean legacy-user
+
+all: build check-layout
 
 build:
-	cargo build --target $(TARGET) --release
+	cargo build --locked --release -p minios-kernel
 
-# Full system boot: kernel + IDE disk with userland and root fs.
-run: build fs.img
-	@rm -f $(RUN_LOG)
-	@timeout $(RUN_SECS) $(QEMU) -kernel $(KERNEL) -drive file=user/fs.img,index=1,if=ide,format=raw \
-	  -m 256M -serial stdio -display none -no-reboot > $(RUN_LOG) 2>&1 || [ $$? -eq 124 ]
-	@cat $(RUN_LOG)
-	@grep -q 'minios v0.2.0 (x86, rust)' $(RUN_LOG) \
-	  || { echo 'FAIL: banner line missing'; exit 1; }
-	@grep -q 'init: starting sh' $(RUN_LOG) \
-	  || { echo 'FAIL: shell did not start'; exit 1; }
-	@echo 'run: serial output verified'
+# Static Multiboot1/ELF64 layout gate (Rust verdict, ADR-0013).
+check-layout: build
+	$(RUNNER) check-elf $(KERNEL)
 
-user:
-	$(MAKE) -C user
+# Reproducible GRUB Multiboot ISO: kernel + embedded early config.
+m0r-iso: build
+	@rm -rf $(ISO_DIR)
+	@mkdir -p $(ISO_DIR)/iso/boot/grub
+	@cp $(KERNEL) $(ISO_DIR)/iso/boot/minios-x86_64.elf
+	@cp $(GRUB_CFG) $(ISO_DIR)/iso/boot/grub/grub.cfg
+	grub-mkimage --format=i386-pc-eltorito --output=$(ISO_DIR)/iso/boot/grub/eltorito.img \
+	  --prefix=/boot/grub --config=$(GRUB_CFG) $(GRUB_MODULES)
+	mkisofs -R -J -b boot/grub/eltorito.img -c boot.catalog -no-emul-boot \
+	  -boot-load-size 4 -boot-info-table --output=$(ISO) $(ISO_DIR)/iso
+	@sha256sum $(KERNEL) $(ISO)
 
-fs.img: user
-	$(MAKE) -C user fs.img
+# Real QEMU boot + strict verdict (exit 33, protocol line, all cases).
+# Evidence (serial.log, qemu.stderr) is kept under $(RUN_DIR) for hashing.
+test-qemu-smoke: m0r-iso
+	@rm -rf $(RUN_DIR)
+	$(RUNNER) run-smoke --iso $(ISO) --work-dir $(RUN_DIR)
+	@sha256sum $(RUN_DIR)/serial.log
 
-check:
-	cargo build --target $(TARGET)
+run-smoke: test-qemu-smoke
 
-# Host unit tests run on the machine's rustc host triple (auto-detected via
-# `rustc -vV`) instead of assuming x86_64-unknown-linux-gnu.
-test:
-	cargo test -p minios-host-tests --target $(HOST_TARGET)
+# Host-side Rust tests: verdict fault self-tests + portable kernel modules.
+test: test-host
 
-test-qemu:
-	./scripts/run-qemu.sh --usertests
+# Host tests run with explicit packages/targets and --locked (plans/linux26/40 §4);
+# -D warnings applies to host triples only and cannot affect kernel rustflags.
+test-host:
+	RUSTFLAGS='-D warnings' cargo test --locked --offline -p minios-host-tests --target $(HOST_TARGET)
+	RUSTFLAGS='-D warnings' cargo test --locked --offline -p minios-runner --target $(HOST_TARGET)
 
 fmt:
 	cargo fmt
 
+fmt-check:
+	cargo fmt --all -- --check
+
 clean:
 	cargo clean
-	rm -f $(RUN_LOG)
+	@rm -rf $(ISO_DIR)
+
+# Legacy i686 userspace (not part of the x86_64 Core path; see kernel/src/legacy).
+legacy-user:
+	$(MAKE) -C user

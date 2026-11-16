@@ -1,0 +1,103 @@
+# M0R Core CI (plans/linux26/40-testing-ci.md §4.1).
+#
+# Tool lock / pinning audit (2026-11-16, plans/linux26/40-testing-ci.md §4.2):
+#   - Every `uses:` is pinned to a full commit SHA fetched from
+#     https://api.github.com (checkout v4, upload-artifact v4, rust-toolchain).
+#   - Rust toolchain comes from rust-toolchain.toml (1.97.1, minimal,
+#     rustfmt, x86_64-unknown-none); CI never resolves `stable`/`latest`.
+#   - QEMU/GRUB/genisoimage are installed from the frozen
+#     snapshot.ubuntu.com timestamp 20261116T000000Z at the exact audited
+#     versions (deb SHA256 digests recorded in 40-testing-ci.md §1.1), so the
+#     CI userland matches the local CORE-UP-GRUB baseline byte-for-byte at the
+#     package level.
+name: core-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APT_SNAPSHOT: "20261116T000000Z"
+
+jobs:
+  m0r-core:
+    name: M0R core (build + static gate + host tests + QEMU smoke)
+    runs-on: ubuntu-22.04
+    # Suite deadline is 120 s inside the Rust runner; the job timeout only
+    # guards the infrastructure around it (40-testing-ci.md §3.5).
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (pinned SHA)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: "Guard: rust-toolchain.toml still pinned to 1.97.1"
+        # dtolnay/rust-toolchain does not read rust-toolchain.toml; the explicit
+        # inputs below are the real lock. This guard fails fast if the toml
+        # drifts away from the version CI installs (40-testing-ci.md 4.2).
+        run: |
+          set -euo pipefail
+          grep -q 'channel = "1.97.1"' rust-toolchain.toml
+
+      - name: "Rust toolchain (pinned 1.97.1, matching rust-toolchain.toml)"
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt
+          targets: x86_64-unknown-none
+
+      - name: Install QEMU/GRUB/genisoimage from frozen apt snapshot
+        run: |
+          set -euo pipefail
+          keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+          snapshot="https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT}/"
+          printf 'deb [signed-by=%s] %s jammy main universe\n' "$keyring" "$snapshot" \
+            | sudo tee /etc/apt/sources.list >/dev/null
+          printf 'deb [signed-by=%s] %s jammy-updates main universe\n' "$keyring" "$snapshot" \
+            | sudo tee -a /etc/apt/sources.list >/dev/null
+          sudo apt-get update -o Acquire::Retries=5
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86=1:6.2+dfsg-2ubuntu6.31 \
+            grub-common=2.06-2ubuntu7.2 \
+            grub-pc-bin=2.06-2ubuntu7.2 \
+            genisoimage=9:1.1.11-3.2ubuntu1
+          echo '--- tool lock evidence ---'
+          dpkg-query -W -f='${Package} ${Version}\n' \
+            qemu-system-x86 grub-common grub-pc-bin genisoimage
+          qemu-system-x86_64 --version | head -1
+          grub-mkimage --version | head -1
+          mkisofs --version 2>&1 | tail -1
+
+      - name: Format check (cargo fmt --check)
+        run: make fmt-check
+
+      - name: Secret scan (fixed in-repo scanner)
+        run: scripts/check-no-secrets.sh
+
+      - name: No-binaries scan (fixed in-repo scanner)
+        run: scripts/check-no-binaries.sh
+
+      - name: Build ELF64 kernel + Multiboot1/ELF64 static layout gate
+        run: make all
+
+      - name: Host tests (verdict fault self-tests + portable modules)
+        run: make test
+
+      - name: "Real QEMU smoke (CORE-UP-GRUB: exit 33 + protocol verdict)"
+        run: make test-qemu-smoke
+
+      - name: Upload M0R evidence (kernel ELF, ISO, serial log, verdict)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: m0r-evidence
+          path: |
+            target/x86_64-unknown-none/release/kernel
+            target/m0r-iso
+            target/m0r-run
+          if-no-files-found: warn
+          retention-days: 30

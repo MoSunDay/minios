@@ -1,21 +1,17 @@
-# Cargo configuration for the minios kernel workspace.
-#
-# The linker script path is resolved relative to the directory cargo is
-# invoked from, so build from the workspace root (or use `make build`).
-
+# Cargo configuration for the x86_64 no_std kernel workspace.
 [build]
-target = "i686-unknown-linux-gnu"
+target = "x86_64-unknown-none"
 
-[target.i686-unknown-linux-gnu]
-linker = "gcc"
-# SSE/SSE2 stay at the i686 target default: rustc requires sse2 for the
-# target ABI. The boot trampoline enables CR4.OSFXSR before Rust runs.
+[target.x86_64-unknown-none]
+linker = "rust-lld"
 rustflags = [
+    "-D", "warnings",
+    "-C", "linker-flavor=ld.lld",
     "-C", "relocation-model=static",
-    "-C", "link-arg=-Tkernel/x86-minios.ld",
-    "-C", "link-arg=-nostartfiles",
-    "-C", "link-arg=-nostdlib",
-    "-C", "link-arg=-static",
-    "-C", "link-arg=-no-pie",
-    "-C", "link-arg=-Wl,--build-id=none",
+    "-C", "code-model=kernel",
+    "-C", "force-frame-pointers=yes",
+    "-C", "target-feature=-sse,-sse2",
+    "-C", "link-arg=-Tkernel/x86_64-minios.ld",
+    "-C", "link-arg=--build-id=none",
+    "-C", "link-arg=-n",
 ]

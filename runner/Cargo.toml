@@ -1,0 +1,13 @@
+[package]
+name = "minios-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "minios Rust host runner: M0R static ELF gate, QEMU smoke run and verdict"
+
+[[bin]]
+name = "minios-runner"
+path = "src/main.rs"
+
+# Zero external dependencies by design.
+[dependencies]

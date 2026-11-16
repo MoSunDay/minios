@@ -1,4 +1,7 @@
-# 01 — 基线审计（xv6 现状 + 环境实测，2026-11-14）
+# 01 — 历史基线审计（xv6 + 原 i686 实现，2026-11-14）
+
+> 本文保留旧架构证据，**不是当前 x86_64 目标的完成证明**。当前基线见
+> 00-scope-linux26.md；M0R/M1R 状态见 STATUS.md。
 
 ## 1. xv6 代码盘点（MoSunDay/xv6 @ 2305a8c "Create mkfs.c"）
 
@@ -27,7 +30,7 @@ mknod unlink link mkdir close —— minios M1 目标：全部等价提供（同
 ## 2. 构建问题（实测）
 
 - gcc 11.4 下 `mkfs.c` 编译失败：`static_assert` 重定义 × `-Werror`（glibc assert.h 冲突）。
-  minios 的 mkfs 以 Rust 重写或加守卫，见 30-ext4.md。
+  该问题仅是历史基线；minios 不复用或修补此 C 程序，mkfs 必须以 Rust 重写，见 30-ext4.md。
 - xv6 内核在开发环境可链接（kernel ELF 142KB）；qemu-system-i386 可用。
 
 ## 3. xv6 git 历史二进制盘点（任务 1 依据）
@@ -47,7 +50,7 @@ mknod unlink link mkdir close —— minios M1 目标：全部等价提供（同
 | qemu-system-i386 | ✅ |
 | gcc 11.4（-m32 可用）/ ld | ✅ 供 xv6 C 用户程序对照构建 |
 | mke2fs / debugfs / e2fsck / dumpe2fs | ✅ ext4 测试闭环关键依赖 |
-| 网络 | 受限环境：HTTPS 到 GitHub 不可用，推送/克隆统一 SSH；rustup/pypi 直连可用 |
+| 外部源 | 构建前预检来源与完整性 | 锁定来源、版本、hash 和包清单；预检失败不得放宽验收基线 |
 
 ## 5. minios 起点（M0 已完成）
 
@@ -56,3 +59,13 @@ mknod unlink link mkdir close —— minios M1 目标：全部等价提供（同
 - 已验证：multiboot 引导 → rust_main；VGA+COM1 双输出；multiboot info 解析
   （lower 639K / upper 129920K）；panic handler。
 - 规模：12 个源文件，最大 136 行（约束：新增 ≤400 行/文件）。
+
+## 6. x86_64 迁移环境复核（2026-11-15）
+
+| 组件 | 实测状态 | 迁移动作 |
+|------|----------|----------|
+| qemu-system-x86_64 6.2 | 已具备 | M0R 直接切换 |
+| rustc/cargo stable 1.97.1 | 已具备 | 保持锁死版本 |
+| x86_64-unknown-none Rust target | **尚未安装** | M0R 首先安装并写入 rust-toolchain/CI |
+| Rust 用户态 target/runtime | 方案已定型，待 M1R 实施 | 见 04-rust-userspace.md；minios 构建不需要 gcc |
+| 原 i686 target / qemu-system-i386 | 仅历史基线 | M0R 后从当前构建与 CI 移除 |

@@ -3,7 +3,7 @@ name = "minios-kernel"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "minios x86 32-bit kernel skeleton (M0)"
+description = "minios x86_64 kernel (M0R)"
 
 [[bin]]
 name = "kernel"

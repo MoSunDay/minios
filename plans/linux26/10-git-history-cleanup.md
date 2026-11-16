@@ -6,7 +6,7 @@
 首推 main 分支即首个提交。为保持"永不入库二进制"，落实四道防线：
 
 1. `.gitignore`（已提交）：`/target`、`*.o/*.d/*.a/*.img/*.iso/*.bin/*.elf/*.map` 等构建产物。
-2. `scripts/check-no-binaries.sh`（M1 落地）：扫描全历史 blob，
+2. `scripts/check-no-binaries.sh`（旧 M1 历史事实，当时已落地）：扫描全历史 blob，
    `git rev-list --objects --all | git cat-file --batch-check=...` 检查
    文本扩展名白名单 + 大小阈值（>512KB 即失败，Cargo.lock/.ld/.S/.rs/.c/.h/.md/.pl/.sh/.py/.toml 之外扩展名需人工白名单）。
 3. pre-commit 钩子（scripts/install-hooks.sh）：按文件级 `git diff --cached --name-only`
@@ -30,8 +30,10 @@
 # 0) 全新镜像克隆（filter-repo 要求非 bare 也建议如此）
 git clone --no-local git@github.com:MoSunDay/xv6.git xv6-clean && cd xv6-clean
 
-# 1) 记录净化前校验基准
-git rev-parse 'HEAD^{tree}' > /tmp/xv6-tree-before.txt
+# 1) 用独占临时文件记录净化前校验基准，退出时清理
+tree_before="$(mktemp)"
+trap 'rm -f -- "$tree_before"' EXIT HUP INT TERM
+git rev-parse 'HEAD^{tree}' > "$tree_before"
 git count-objects -vH | grep size-pack
 
 # 2) 清除二进制路径（web/ 整目录 + 各版本 pdf/ps/tar.gz；其余历史保留）
@@ -41,7 +43,7 @@ git filter-repo --invert-paths \
   --path-glob '*.gz'  --path-glob 'xv6-rev*'
 
 # 3) 校验：最终树必须与净化前完全一致（HEAD 树本就不含这些文件）
-test "$(git rev-parse 'HEAD^{tree}')" = "$(cat /tmp/xv6-tree-before.txt)" \
+test "$(git rev-parse 'HEAD^{tree}')" = "$(cat "$tree_before")" \
   && echo TREE-IDENTICAL || echo TREE-CHANGED  # 必须输出 TREE-IDENTICAL
 
 # 4) 复核仓库体积（预期从 ~12MB 降到 ~2MB 级）并确认无残留
