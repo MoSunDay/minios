@@ -77,8 +77,11 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   - `make all`/`make test`/`make test-qemu-smoke` 在 CI 复现本地同判绿（exit 33 +
     协议 verdict PASS）——假设 3（CI target 目录）闭环；`ubuntu-22.04` 可用——假设 1 闭环；
   - kernel ELF/ISO/serial.log/verdict 已作为 artifact `m0r-evidence` 上传（30 天保留）。
-- 判绿合成：净树本地证据（上节）+ CI 外部环境复现 → 40-testing-ci.md 要求的双重环境
-  一致取证成立，**M0R 判 🟢**。
+- 终态复核：判绿 commit `04c85b7`（判绿后的最终推送态）再触发 run #2，结论亦为
+  success（含新增提交过双扫描）：https://github.com/MoSunDay/minios/actions/runs/43887412443
+- 判绿合成：净树本地证据（下节）+ CI 外部环境复现 → 40-testing-ci.md 要求的双重环境
+  一致取证成立，**M0R 判 🟢**。后续 docs/hardening 轮的 CI 复核以 Actions 历史为准，
+  不再逐轮回写本节（避免文档-触发无限递归）。
 
 ### 净树取证记录（2026-11-16，正式证据）
 

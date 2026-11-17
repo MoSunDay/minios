@@ -35,13 +35,15 @@ jobs:
       - name: Checkout (pinned SHA)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: "Guard: rust-toolchain.toml still pinned to 1.97.1"
+      - name: "Guard: rust-toolchain.toml still pinned (1.97.1 + components/targets)"
         # dtolnay/rust-toolchain does not read rust-toolchain.toml; the explicit
         # inputs below are the real lock. This guard fails fast if the toml
-        # drifts away from the version CI installs (40-testing-ci.md 4.2).
+        # drifts away from what CI installs (40-testing-ci.md 4.2).
         run: |
           set -euo pipefail
           grep -q 'channel = "1.97.1"' rust-toolchain.toml
+          grep -q 'components = \["rustfmt"\]' rust-toolchain.toml
+          grep -q 'targets = \["x86_64-unknown-none"\]' rust-toolchain.toml
 
       - name: "Rust toolchain (pinned 1.97.1, matching rust-toolchain.toml)"
         uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
@@ -99,5 +101,5 @@ jobs:
             target/x86_64-unknown-none/release/kernel
             target/m0r-iso
             target/m0r-run
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
