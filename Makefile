@@ -26,9 +26,9 @@ GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial ech
 all: build check-layout
 
 # ksymtab convergence (kernel/build.rs): the generated table is size-fixed,
-# so the kernel hash stabilizes after the ELF exists; loop <= 3 passes.
+# so the kernel hash stabilizes after the ELF exists; loop <= 4 passes.
 build:
-	@prev=""; for i in 1 2 3; do \
+	@prev=""; for i in 1 2 3 4; do \
 	  cargo build --locked --release -p minios-kernel || exit 1; \
 	  cur=$$(sha256sum $(KERNEL) | cut -d' ' -f1); \
 	  if [ "$$cur" = "$$prev" ]; then exit 0; fi; \
