@@ -72,19 +72,27 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
     mm::frame::init(mbi_phys);
     mm::pgtable::set_boot_pml4(io::in64_cr3() as usize);
     match mode {
+        // Kernel-mode expected-fault suite: CPL0 injections + fixup + the
+        // M1RFault observer; exits 0x11 -> QEMU 35 on PASS (40 §2.1.6).
         BootMode::M1rFault => {
             ksymtab::set_active_suite("m1r-fault");
-            m1r_fatal("m1r-fault suite not wired yet");
+            kernel::faultsuite::run();
         }
-        BootMode::M1rSuite => ksymtab::set_active_suite("m1r"),
-        BootMode::Full => ksymtab::set_active_suite("minios"),
+        // Kernel-mode suite: CPL0 interrupt path, UserPtr fixup, ksym.
+        BootMode::M1rSuite => {
+            ksymtab::set_active_suite("m1r");
+            kernel::suite::run();
+        }
+        BootMode::Full => {
+            ksymtab::set_active_suite("minios");
+            // The embedded init ELF arrives with the S3 userspace chain.
+            if !proc::proc::userinit(b"") {
+                m1r_fatal("init image not embedded yet");
+            }
+            proc::sched::scheduler();
+        }
         BootMode::M0rSmoke => unreachable!(),
     }
-    // The embedded init ELF arrives with the S3 userspace chain.
-    if !proc::proc::userinit(b"") {
-        m1r_fatal("init image not embedded yet");
-    }
-    proc::sched::scheduler();
 }
 
 fn m1r_fatal(why: &str) -> ! {

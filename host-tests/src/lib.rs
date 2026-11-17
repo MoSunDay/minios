@@ -15,6 +15,8 @@ pub mod fixup_table;
 pub mod ksyms;
 #[path = "../../kernel/src/lib/string.rs"]
 pub mod string;
+#[path = "../../kernel/src/kernel/sysarg.rs"]
+pub mod sysarg;
 #[path = "../../kernel/src/kernel/tf_layout.rs"]
 pub mod tf_layout;
 

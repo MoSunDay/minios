@@ -14,14 +14,26 @@ KERNEL   := $(TARGET_DIR)/x86_64-unknown-none/release/kernel
 RUNNER   := cargo run --offline -q -p minios-runner --target $(HOST_TARGET) --
 
 # CORE-UP-GRUB image pieces (ADR-0014; frozen in plans/linux26/40).
+# M1R (S2) adds two cmdline variants + the frozen raw-IDE root drive
+# (CORE-UP-GRUB-R1, 40 §1.2): root.raw is a placeholder zero disk until the
+# S3 Rust mkfs takes it over.
 GRUB_CFG := scripts/m0r-grub-early.cfg
+M1R_SUITE_CFG := scripts/m1r-suite-grub.cfg
+M1R_FAULT_CFG := scripts/m1r-fault-grub.cfg
 ISO_DIR  := $(TARGET_DIR)/m0r-iso
+M1R_SUITE_DIR := $(TARGET_DIR)/m1r-suite-iso
+M1R_FAULT_DIR := $(TARGET_DIR)/m1r-fault-iso
 ISO      := $(ISO_DIR)/minios-m0r.iso
+M1R_SUITE_ISO := $(M1R_SUITE_DIR)/minios-m1r-suite.iso
+M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
 RUN_DIR  := $(TARGET_DIR)/m0r-run
+M1R_SUITE_RUN := $(TARGET_DIR)/m1r-suite-run
+M1R_FAULT_RUN := $(TARGET_DIR)/m1r-fault-run
+ROOT_RAW := $(TARGET_DIR)/root.raw
 GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial echo boot search memdisk
 
-.PHONY: all build check-layout m0r-iso test-qemu-smoke run-smoke test test-host fmt fmt-check \
-        clean legacy-user
+.PHONY: all build check-layout m0r-iso m1r-iso m1r-fault-iso test-qemu-smoke run-smoke \
+        test-qemu test-expected-fault test test-host fmt fmt-check clean legacy-user
 
 all: build check-layout
 
@@ -51,6 +63,29 @@ m0r-iso: build
 	  -boot-load-size 4 -boot-info-table --output=$(ISO) $(ISO_DIR)/iso
 	@sha256sum $(KERNEL) $(ISO)
 
+# One M1R ISO variant from the kernel + its cmdline early config.
+define make-m1r-iso
+	@rm -rf $(1)
+	@mkdir -p $(1)/iso/boot/grub
+	@cp $(KERNEL) $(1)/iso/boot/minios-x86_64.elf
+	@cp $(2) $(1)/iso/boot/grub/grub.cfg
+	grub-mkimage --format=i386-pc-eltorito --output=$(1)/iso/boot/grub/eltorito.img \
+	  --prefix=/boot/grub --config=$(2) $(GRUB_MODULES)
+	mkisofs -R -J -b boot/grub/eltorito.img -c boot.catalog -no-emul-boot \
+	  -boot-load-size 4 -boot-info-table --output=$(3) $(1)/iso
+	@sha256sum $(KERNEL) $(3)
+endef
+
+m1r-iso: build
+	$(call make-m1r-iso,$(M1R_SUITE_DIR),$(M1R_SUITE_CFG),$(M1R_SUITE_ISO))
+
+m1r-fault-iso: build
+	$(call make-m1r-iso,$(M1R_FAULT_DIR),$(M1R_FAULT_CFG),$(M1R_FAULT_ISO))
+
+# Placeholder root disk (1 MiB zero image; S3 Rust mkfs takes it over).
+$(ROOT_RAW):
+	dd if=/dev/zero of=$@ bs=1M count=1 status=none
+
 # Real QEMU boot + strict verdict (exit 33, protocol line, all cases).
 # Evidence (serial.log, qemu.stderr) is kept under $(RUN_DIR) for hashing.
 test-qemu-smoke: m0r-iso
@@ -59,6 +94,19 @@ test-qemu-smoke: m0r-iso
 	@sha256sum $(RUN_DIR)/serial.log
 
 run-smoke: test-qemu-smoke
+
+# M1R kernel-mode suite (CORE-UP-GRUB-R1: + frozen raw IDE root disk).
+test-qemu: m1r-iso $(ROOT_RAW)
+	@rm -rf $(M1R_SUITE_RUN)
+	$(RUNNER) run-m1r-suite --iso $(M1R_SUITE_ISO) --root $(ROOT_RAW) --work-dir $(M1R_SUITE_RUN)
+	@sha256sum $(M1R_SUITE_RUN)/serial.log
+
+# M1R expected-fault suite: dedicated log namespace + verdict (40 §2.1.6);
+# argv identical to test-qemu (byte-pinned by the runner self-tests).
+test-expected-fault: m1r-fault-iso $(ROOT_RAW)
+	@rm -rf $(M1R_FAULT_RUN)
+	$(RUNNER) run-m1r-fault --iso $(M1R_FAULT_ISO) --root $(ROOT_RAW) --work-dir $(M1R_FAULT_RUN)
+	@sha256sum $(M1R_FAULT_RUN)/serial.log
 
 # Host-side Rust tests: verdict fault self-tests + portable kernel modules.
 test: test-host
@@ -77,7 +125,7 @@ fmt-check:
 
 clean:
 	cargo clean
-	@rm -rf $(ISO_DIR)
+	@rm -rf $(ISO_DIR) $(M1R_SUITE_DIR) $(M1R_FAULT_DIR)
 
 # Legacy i686 userspace (not part of the x86_64 Core path; see kernel/src/legacy).
 legacy-user:

@@ -113,9 +113,15 @@ pub fn exit(status: i32) -> ! {
 }
 
 /// xv6 wait(): reap one zombie child, -1 when childless/killed.
-/// The lock is acquired once; sleep() transfers it across the swtch.
 #[allow(dead_code)] // S2 sys_wait4/sys_kill/sys_brk
 pub fn wait() -> i32 {
+    wait_status(-1).0
+}
+
+/// wait4-style reap: pid > 0 targets that child, pid <= 0 takes any.
+/// Returns (pid, exit status) or (-1, 0) when childless/killed.
+/// The lock is acquired once; sleep() transfers it across the swtch.
+pub fn wait_status(want_pid: i32) -> (i32, i32) {
     let _guard = PTABLE_LOCK.lock();
     let me = myproc();
     loop {
@@ -128,17 +134,21 @@ pub fn wait() -> i32 {
                 if (*p).parent != me || p == me {
                     continue;
                 }
+                if want_pid > 0 && (*p).pid != want_pid {
+                    continue;
+                }
                 have_kids = true;
                 if (*p).state == ProcState::ZOMBIE {
                     let pid = (*p).pid;
+                    let xstate = (*p).xstate;
                     freeproc(p);
                     drop(_guard);
-                    return pid;
+                    return (pid, xstate);
                 }
             }
             if !have_kids || (*me).killed != 0 {
                 drop(_guard);
-                return -1;
+                return (-1, 0);
             }
             // Sleep on the ptable channel; the scheduler takes the lock.
             super::sleep::sleep(super::ptable_chan(), &PTABLE_LOCK);
@@ -146,8 +156,51 @@ pub fn wait() -> i32 {
     }
 }
 
+/// fork(): duplicate the current process — address space (Mm::copy, no COW
+/// until M2), trapframe (child rax=0), FPU area, parent link — and mark the
+/// child RUNNABLE. Returns the child pid or -1 (ptable/full memory).
+pub fn fork() -> i32 {
+    let me = myproc();
+    // SAFETY: process context on its own kernel stack; ptable lock free.
+    let np = unsafe { allocproc() };
+    if np.is_null() {
+        return -1;
+    }
+    // SAFETY: the EMBRYO slot is exclusively ours until RUNNABLE is set.
+    unsafe {
+        (*np).mm = (*me).mm.as_ref().and_then(|mm| mm.copy());
+        if (*me).mm.is_some() && (*np).mm.is_none() {
+            let _guard = PTABLE_LOCK.lock();
+            freeproc(np);
+            return -1;
+        }
+        if !(*me).tf.is_null() && !(*np).tf.is_null() {
+            core::ptr::copy_nonoverlapping((*me).tf, (*np).tf, 1);
+            // Child returns 0 from the (never-taken-in-parent) fork call.
+            (*(*np).tf).rax = 0;
+        }
+        (*np).parent = me;
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!((*me).fpu) as *const u8,
+            core::ptr::addr_of_mut!((*np).fpu) as *mut u8,
+            core::mem::size_of::<super::FpuArea>(),
+        );
+        core::ptr::copy_nonoverlapping(
+            (*me).name.as_ptr(),
+            (*np).name.as_mut_ptr(),
+            (*me).name.len(),
+        );
+    }
+    let pid = unsafe { (*np).pid };
+    let _guard = PTABLE_LOCK.lock();
+    // SAFETY: ptable lock held; the slot leaves EMBRYO for the scheduler.
+    unsafe {
+        (*np).state = ProcState::RUNNABLE;
+    }
+    pid
+}
+
 /// Mark `pid` killed; the next trap/sched path exits it.
-#[allow(dead_code)] // S2 sys_wait4/sys_kill/sys_brk
 pub fn kill(pid: i32) -> i32 {
     let _guard = PTABLE_LOCK.lock();
     // SAFETY: ptable lock held.
@@ -180,7 +233,6 @@ pub fn kill_cur_on_fault() -> ! {
 }
 
 /// Grow the process heap by `n` (brk); returns the old break or 0 on error.
-#[allow(dead_code)] // S2 sys_wait4/sys_kill/sys_brk
 pub fn growproc(n: i64) -> usize {
     // SAFETY: process context.
     let p = myproc();

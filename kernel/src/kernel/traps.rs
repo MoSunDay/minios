@@ -1,12 +1,14 @@
 //! Trap frames, IDT wiring, and the shared trap/syscall dispatchers.
 
 use core::arch::global_asm;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::fixup;
 use super::oops;
 pub use super::tf_layout::Trapframe;
 use crate::arch::x86_64::cpu;
 use crate::arch::x86_64::io;
+use crate::console;
 
 global_asm!(
     include_str!("../arch/x86_64/trapasm.S"),
@@ -143,6 +145,36 @@ pub fn init_idt() {
 #[unsafe(no_mangle)]
 pub static mut m1r_force_iret: u8 = 0;
 
+/// Expected-fault observer switch (m1r-fault boot mode only): when set, a
+/// fixup-table hit first prints one structured M1RFault line (40 §2.1.6);
+/// it never changes fixup/recovery semantics, and ordinary suites keep it
+/// off so their serial output stays untouched.
+pub static OBSERVE_FAULTS: AtomicBool = AtomicBool::new(false);
+
+/// Shared kernel-fault path: fixup recovery (optionally observed) or oops.
+fn fixup_or_oops(tf: &mut Trapframe, why: &str) {
+    match fixup::lookup(tf.rip) {
+        Some(fix_rip) => {
+            if OBSERVE_FAULTS.load(Ordering::SeqCst) {
+                oops::fault_line(
+                    super::faultsuite::current_fault_id(),
+                    oops::vector_kind(tf.vector),
+                    tf,
+                    io::in64_cr2(),
+                );
+                if tf.vector == T_PGFLT {
+                    console::write_str("  fault-kind: ");
+                    console::write_str(oops::pf_ec_string(tf.err));
+                    console::write_str("\n");
+                }
+                super::faultsuite::note_observed();
+            }
+            tf.rip = fix_rip;
+        }
+        None => oops::kernel_fault(tf, why),
+    }
+}
+
 /// C entry from isr_common.
 #[unsafe(no_mangle)]
 pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
@@ -153,34 +185,18 @@ pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
             // Spurious/unhandled PIC lines: acknowledge conservatively.
             crate::drivers::pic::eoi(v as u8);
         }
-        T_PGFLT if !tf.from_user() => {
-            if fixup::apply(tf) {
-                return;
-            }
-            oops::kernel_fault(tf, "page fault in kernel");
-        }
-        T_GPFLT if !tf.from_user() => {
-            if fixup::apply(tf) {
-                return;
-            }
-            oops::kernel_fault(tf, "general protection fault in kernel");
-        }
+        T_PGFLT if !tf.from_user() => fixup_or_oops(tf, "page fault in kernel"),
+        T_GPFLT if !tf.from_user() => fixup_or_oops(tf, "general protection fault in kernel"),
+        // Syscalls must arrive through LSTAR (_syscall_entry), never int
+        // 0x80: the IDT gate has no swapgs/stack-switch, so a CPL0 entry
+        // here is an ABI invariant violation, not a recoverable fault.
+        T_SYSCALL => oops::kernel_fault(tf, "syscall via IDT vector (LSTAR only)"),
         v if v < IRQ_BASE && tf.from_user() => {
             oops::user_fault(tf, v);
             crate::proc::proc::kill_cur_on_fault();
         }
-        v if v < IRQ_BASE => {
-            if fixup::apply(tf) {
-                return;
-            }
-            oops::kernel_fault(tf, "kernel exception");
-        }
-        _ => {
-            if fixup::apply(tf) {
-                return;
-            }
-            oops::kernel_fault(tf, "unexpected trap");
-        }
+        v if v < IRQ_BASE => fixup_or_oops(tf, "kernel exception"),
+        _ => fixup_or_oops(tf, "unexpected trap"),
     }
 }
 

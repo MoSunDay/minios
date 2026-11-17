@@ -54,6 +54,17 @@ fn print_dec(mut v: u64) {
     }
 }
 
+/// Short fault-kind tag for one vector (observer lines and oops paths).
+pub fn vector_kind(v: u64) -> &'static str {
+    match v {
+        super::traps::T_PGFLT => "PF",
+        super::traps::T_GPFLT => "GP",
+        super::traps::T_DIVIDE => "DE",
+        super::traps::T_BRKPT => "BP",
+        _ => "EX",
+    }
+}
+
 /// Decode #PF error-code bits (P W/U RSV I/D PK SGL).
 pub fn pf_ec_string(ec: u64) -> &'static str {
     match (ec & 1, ec & 2, ec & 4) {

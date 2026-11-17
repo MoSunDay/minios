@@ -145,7 +145,9 @@ _low_start:
     wrmsr
     lgdt _boot_gdt_descriptor
     movl %cr0, %eax
-    orl $0x80000000, %eax
+    /* PG | WP: without WP a CPL0 write to a read-only page (kernel .rodata)
+     * succeeds silently, so the PTE permissions above would not fault. */
+    orl $0x80010000, %eax
     movl %eax, %cr0
     ljmp $0x08, $_long64_start
 
@@ -200,7 +202,10 @@ _saved_magic:
 _saved_mbi:
     .long 0
 
-.section .boot.rodata, "a"
+/* The CPU writes descriptor Accessed bits into the GDT on segment loads
+ * (QEMU RMWs the entry word), so it must live in the writable boot data
+ * mapping once CR0.WP enforces the read-only text/rodata pages. */
+.section .boot.data, "aw"
 .align 8
 _boot_gdt:
     .quad 0

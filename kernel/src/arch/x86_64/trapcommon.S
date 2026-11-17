@@ -139,9 +139,23 @@ trapret_common:
     pop_all_regs
     addq $16, %rsp            /* stack now: [rip][cs][rflags][rsp][ss] */
     testb $3, 8(%rsp)         /* returning to user? */
-    jz 1f
+    jnz 2f
+    /* CPL0 return: a same-privilege iretq pops only rip/cs/rflags, so
+     * the synthesized rsp/ss would stay unpopped and the interrupted
+     * context would resume with rsp 16 bytes low — its first epilogue
+     * would unwind garbage. Slide the three-slot tail up over the
+     * synthesized pair; once iretq pops it, rsp lands exactly on the
+     * trap-time rsp (frame base + 176). Copy the highest slot first. */
+    movq 16(%rsp), %rax       /* rflags -> ss slot */
+    movq %rax, 32(%rsp)
+    movq 8(%rsp), %rax        /* cs -> rsp slot */
+    movq %rax, 24(%rsp)
+    movq 0(%rsp), %rax        /* rip -> rflags slot */
+    movq %rax, 16(%rsp)
+    addq $16, %rsp
+    iretq
+2:
     swapgs
-1:
     iretq
 
 /* --- first return to user mode ---------------------------------------------

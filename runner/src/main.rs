@@ -1,6 +1,8 @@
-//! minios M0R host runner: static ELF gate + CORE-UP-GRUB smoke run + verdict.
+//! minios host runner: static ELF gate + CORE-UP-GRUB suite runs + verdict.
 //! Shell/Make only launches this binary; all judgement lives in Rust
-//! (plans/linux26 ADR-0013, 40 §2).
+//! (plans/linux26 ADR-0013, 40 §2). M0R uses config CORE-UP-GRUB; the M1R
+//! suites use CORE-UP-GRUB-R1, appending the frozen raw-IDE root drive
+//! (40 §1.2) with byte-identical argv between the two M1R targets.
 
 mod elfcheck;
 mod verdict;
@@ -12,17 +14,23 @@ use std::time::{Duration, Instant};
 
 const QEMU: &str = "qemu-system-x86_64";
 const DEFAULT_DEADLINE_SECS: u64 = 120;
+pub const CONFIG_ID_M0R: &str = "CORE-UP-GRUB";
+pub const CONFIG_ID_M1R: &str = "CORE-UP-GRUB-R1";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
         Some("check-elf") => cmd_check_elf(&args[1..]),
-        Some("run-smoke") => cmd_run_smoke(&args[1..]),
+        Some("run-smoke") => cmd_run_suite(Suite::M0r, "run-smoke", &args[1..]),
+        Some("run-m1r-suite") => cmd_run_suite(Suite::M1rSuite, "run-m1r-suite", &args[1..]),
+        Some("run-m1r-fault") => cmd_run_suite(Suite::M1rFault, "run-m1r-fault", &args[1..]),
         _ => {
             eprintln!(
                 "usage: minios-runner <command>\n\
                  \x20 check-elf <kernel-elf>\n\
-                 \x20 run-smoke --iso <iso> [--deadline-secs N] [--work-dir DIR]"
+                 \x20 run-smoke --iso <iso> [--deadline-secs N] [--work-dir DIR]\n\
+                 \x20 run-m1r-suite --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
+                 \x20 run-m1r-fault --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]"
             );
             2
         }
@@ -69,105 +77,145 @@ fn cmd_check_elf(args: &[String]) -> i32 {
     }
 }
 
-fn cmd_run_smoke(args: &[String]) -> i32 {
+/// The three runnable suites and their frozen identities.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Suite {
+    M0r,
+    M1rSuite,
+    M1rFault,
+}
+
+impl Suite {
+    fn needs_root(&self) -> bool {
+        !matches!(self, Suite::M0r)
+    }
+    fn config_id(&self) -> &'static str {
+        match self {
+            Suite::M0r => CONFIG_ID_M0R,
+            _ => CONFIG_ID_M1R,
+        }
+    }
+    fn suite_label(&self) -> &'static str {
+        match self {
+            Suite::M0r => "m0r",
+            Suite::M1rSuite => "m1r",
+            Suite::M1rFault => "m1r-fault",
+        }
+    }
+}
+
+fn cmd_run_suite(suite: Suite, cmd: &str, args: &[String]) -> i32 {
     let mut iso: Option<PathBuf> = None;
+    let mut root: Option<PathBuf> = None;
     let mut work_dir: Option<PathBuf> = None;
     let mut deadline = DEFAULT_DEADLINE_SECS;
     let mut i = 0;
+    let bad = |what: &str| -> i32 {
+        eprintln!("{cmd}: {what}");
+        2
+    };
     while i < args.len() {
+        let take_value = |i: &mut usize, what: &str| -> Option<String> {
+            *i += 1;
+            match args.get(*i) {
+                Some(v) => Some(v.clone()),
+                None => {
+                    eprintln!("{cmd}: {what} needs a value");
+                    None
+                }
+            }
+        };
         match args[i].as_str() {
-            "--iso" => {
-                i += 1;
-                match args.get(i) {
-                    Some(v) => iso = Some(PathBuf::from(v)),
-                    None => {
-                        eprintln!("run-smoke: --iso needs a value");
-                        return 2;
-                    }
-                }
-            }
-            "--work-dir" => {
-                i += 1;
-                match args.get(i) {
-                    Some(v) => work_dir = Some(PathBuf::from(v)),
-                    None => {
-                        eprintln!("run-smoke: --work-dir needs a value");
-                        return 2;
-                    }
-                }
-            }
-            "--deadline-secs" => {
-                i += 1;
-                match args.get(i).and_then(|v| v.parse::<u64>().ok()) {
-                    Some(v) => deadline = v,
-                    None => {
-                        eprintln!("run-smoke: --deadline-secs needs a number");
-                        return 2;
-                    }
-                }
-            }
+            "--iso" => match take_value(&mut i, "--iso") {
+                Some(v) => iso = Some(PathBuf::from(v)),
+                None => return 2,
+            },
+            "--root" => match take_value(&mut i, "--root") {
+                Some(v) => root = Some(PathBuf::from(v)),
+                None => return 2,
+            },
+            "--work-dir" => match take_value(&mut i, "--work-dir") {
+                Some(v) => work_dir = Some(PathBuf::from(v)),
+                None => return 2,
+            },
+            "--deadline-secs" => match take_value(&mut i, "--deadline-secs") {
+                Some(v) => match v.parse::<u64>() {
+                    Ok(v) => deadline = v,
+                    Err(_) => return bad("--deadline-secs needs a number"),
+                },
+                None => return 2,
+            },
             other => {
-                eprintln!("run-smoke: unknown arg {other}");
+                eprintln!("{cmd}: unknown arg {other}");
                 return 2;
             }
         }
         i += 1;
     }
     let Some(iso) = iso else {
-        eprintln!("run-smoke: --iso <iso> is required");
-        return 2;
+        return bad("--iso <iso> is required");
     };
     if !iso.is_file() {
-        eprintln!("run-smoke: iso not found: {}", iso.display());
-        return 2;
+        return bad(&format!("iso not found: {}", iso.display()));
     }
+    let root = if suite.needs_root() {
+        let Some(root) = root else {
+            return bad("--root <root.raw> is required for M1R suites");
+        };
+        if !root.is_file() {
+            return bad(&format!("root disk not found: {}", root.display()));
+        }
+        root
+    } else {
+        PathBuf::new()
+    };
 
     let work = match work_dir {
         Some(dir) => {
             if let Err(e) = std::fs::create_dir_all(&dir) {
-                eprintln!("run-smoke: cannot create work dir {}: {e}", dir.display());
-                return 2;
+                return bad(&format!("cannot create work dir {}: {e}", dir.display()));
             }
             dir
         }
         None => fresh_work_dir(),
     };
     let serial = work.join("serial.log");
-    let argv = qemu_argv(&iso, &serial);
-    println!("config_id=CORE-UP-GRUB argv={}", argv.join(" "));
+    let argv = qemu_argv(
+        &iso,
+        &serial,
+        if suite.needs_root() {
+            Some(&root)
+        } else {
+            None
+        },
+    );
+    println!("config_id={} argv={}", suite.config_id(), argv.join(" "));
 
     let log = std::fs::read_to_string(&serial).unwrap_or_default();
     if !log.is_empty() {
-        eprintln!(
-            "run-smoke: serial log already exists and is non-empty: {}",
+        return bad(&format!(
+            "serial log already exists and is non-empty: {}",
             serial.display()
-        );
-        return 2;
+        ));
     }
 
     let stderr_path = work.join("qemu.stderr");
     let stderr_file = std::fs::File::create(&stderr_path)
-        .map_err(|e| {
-            eprintln!("run-smoke: cannot create {}: {e}", stderr_path.display());
-        })
+        .map_err(|e| eprintln!("{cmd}: cannot create {}: {e}", stderr_path.display()))
         .ok();
-    let mut cmd = Command::new(QEMU);
-    cmd.args(&argv[1..]).stdout(Stdio::null());
+    let mut cmdq = Command::new(QEMU);
+    cmdq.args(&argv[1..]).stdout(Stdio::null());
     match stderr_file {
         Some(f) => {
-            cmd.stderr(Stdio::from(f));
+            cmdq.stderr(Stdio::from(f));
         }
         None => {
-            cmd.stderr(Stdio::null());
+            cmdq.stderr(Stdio::null());
         }
     }
-    let child = cmd.spawn();
-    let mut child = match child {
+    let mut child = match cmdq.spawn() {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("run-smoke: cannot spawn {QEMU}: {e}");
-            return 2;
-        }
+        Err(e) => return bad(&format!("cannot spawn {QEMU}: {e}")),
     };
 
     let started = Instant::now();
@@ -186,7 +234,7 @@ fn cmd_run_smoke(args: &[String]) -> i32 {
                 sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                eprintln!("run-smoke: wait failed: {e}");
+                eprintln!("{cmd}: wait failed: {e}");
                 let _ = child.kill();
                 return 2;
             }
@@ -207,9 +255,20 @@ fn cmd_run_smoke(args: &[String]) -> i32 {
         exit_code,
         timed_out,
     };
-    match verdict::judge(&verdict::m0r_spec(), &outcome) {
-        Ok(()) => {
-            println!("verdict: PASS suite=m0r run=core-up config_id=CORE-UP-GRUB");
+    let judged = match suite {
+        Suite::M0r => verdict::judge(&verdict::m0r_spec(), &outcome).map(|_| 33),
+        Suite::M1rSuite => verdict::judge(&verdict::m1r_suite_spec(), &outcome).map(|_| 33),
+        Suite::M1rFault => verdict::judge_fault(&verdict::m1r_fault_spec(), &outcome)
+            .map(|_| verdict::EXPECTED_FAULT_EXIT_CODE),
+    };
+    match judged {
+        Ok(expected_exit) => {
+            println!(
+                "verdict: PASS suite={} run=core-up config_id={}",
+                suite.suite_label(),
+                suite.config_id()
+            );
+            debug_assert_eq!(expected_exit, exit_code.unwrap_or(-1));
             0
         }
         Err(reasons) => {
@@ -221,8 +280,11 @@ fn cmd_run_smoke(args: &[String]) -> i32 {
     }
 }
 
-fn qemu_argv(iso: &Path, serial: &Path) -> Vec<String> {
-    [
+/// Frozen QEMU argv (CORE-UP-GRUB base, 40 §1). The M1R suites append the
+/// frozen raw-IDE root drive (CORE-UP-GRUB-R1, 40 §1.2) — every parameter
+/// explicit, never a shared writable template.
+fn qemu_argv(iso: &Path, serial: &Path, root: Option<&Path>) -> Vec<String> {
+    let mut argv = [
         QEMU.to_string(),
         "-machine".into(),
         "pc-i440fx-6.2,accel=tcg".into(),
@@ -246,7 +308,15 @@ fn qemu_argv(iso: &Path, serial: &Path) -> Vec<String> {
         "-cdrom".into(),
         iso.display().to_string(),
     ]
-    .to_vec()
+    .to_vec();
+    if let Some(root) = root {
+        argv.push("-drive".into());
+        argv.push(format!(
+            "file={},format=raw,if=ide,index=0,cache=writeback,snapshot=off",
+            root.display()
+        ));
+    }
+    argv
 }
 
 fn fresh_work_dir() -> PathBuf {
@@ -257,4 +327,73 @@ fn fresh_work_dir() -> PathBuf {
     let base = std::env::temp_dir().join(format!("minios-m0r-{}-{}", std::process::id(), nanos));
     let _ = std::fs::create_dir_all(&base);
     base
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn m0r_argv_is_frozen() {
+        let argv = qemu_argv(
+            Path::new("/iso/m0r.iso"),
+            Path::new("/run/serial.log"),
+            None,
+        );
+        let want: Vec<&str> = [
+            "qemu-system-x86_64",
+            "-machine",
+            "pc-i440fx-6.2,accel=tcg",
+            "-cpu",
+            "qemu64",
+            "-m",
+            "256M",
+            "-smp",
+            "1",
+            "-display",
+            "none",
+            "-monitor",
+            "none",
+            "-serial",
+            "file:/run/serial.log",
+            "-nic",
+            "none",
+            "-no-reboot",
+            "-device",
+            "isa-debug-exit,iobase=0xf4,iosize=0x04",
+            "-cdrom",
+            "/iso/m0r.iso",
+        ]
+        .to_vec();
+        assert_eq!(argv, want);
+    }
+
+    #[test]
+    fn m1r_argv_appends_frozen_ide_drive() {
+        let suite = qemu_argv(
+            Path::new("/iso/m1r.iso"),
+            Path::new("/run/serial.log"),
+            Some(Path::new("/run/root.raw")),
+        );
+        let fault = qemu_argv(
+            Path::new("/iso/m1r.iso"),
+            Path::new("/run/serial.log"),
+            Some(Path::new("/run/root.raw")),
+        );
+        assert_eq!(suite[suite.len() - 2], "-drive");
+        assert_eq!(
+            suite.last().unwrap(),
+            "file=/run/root.raw,format=raw,if=ide,index=0,cache=writeback,snapshot=off"
+        );
+        // The two M1R targets share one argv byte-for-byte (T5 gate).
+        assert_eq!(suite, fault);
+        // And the M0R argv is a strict prefix of it.
+        let m0r = qemu_argv(
+            Path::new("/iso/m1r.iso"),
+            Path::new("/run/serial.log"),
+            None,
+        );
+        assert_eq!(&suite[..m0r.len()], &m0r[..]);
+        assert_eq!(suite.len(), m0r.len() + 2);
+    }
 }

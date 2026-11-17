@@ -18,7 +18,7 @@
 | 里程碑 | 交付摘要 | 状态 | 当前证据/前置 |
 |--------|----------|------|---------------|
 | M0R | 工具锁、Multiboot1/ELF64、长模式、高半区、真实 QEMU smoke、CI workflow | 🟢 **done**（2026-11-16 判绿） | 净树 HEAD `4c22b7b` 全套 exit 0 + 三组 sha256 + CI 首跑 success：https://github.com/MoSunDay/minios/actions/runs/43886738739 |
-| M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | ⬜ **pending** | 等 M0R 全绿；旧 C usertests 不计 |
+| M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟡 **S1+S2 已交付** | trap/fixup/定时器运行时全绿（m1r-suite 33、m1r-fault 35、M0R 串口字节不变）；S3 用户 ELF（execve）待做；旧 C usertests 不计 |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | ⬜ pending | 等 M1R 全绿 |
 | M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE | ⬜ pending | 等 M2 全绿 |
 | M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | ⬜ pending | 等 M3 全绿 |
@@ -121,3 +121,29 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
 
 M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr fault fixup 等均是
 后续交付，不因方案已定型而标记完成。commit、push、部署和历史改写仍需单独明确授权。
+
+2026-11-17 本轮增量（M1R-S2：trap/fixup/timer 运行时 + 内核态双套件，均已在本地验证）：
+
+- 交付 `m1r-suite`（4 用例：m1r.irq.pit / uaccess.copyin_efault / uaccess.copyout_efault /
+  ksym.self，PASS exit 33）与 `m1r-fault`（5 注入，PASS exit 35，FATAL 37），Makefile
+  `m1r-iso`/`m1r-fault-iso`/`test-qemu`/`test-expected-fault`，runner verdict 拆分
+  （verdict/{mod,m0r,m1r/{mod,fault,tests}}），config_id=CORE-UP-GRUB-R1（两 m1r 目标
+  argv 逐字节一致）。
+- 证据（`verdict: PASS` + sha256）：
+  - `1d33da59cf22185baa617b499fb80223f13a209b1936d2bae4218f32f3084176  target/m1r-suite-run/serial.log`（exit 33，total=4 passed=4）
+  - `5ca25fdb7e890dbfcae5ade0458e7ee72d13873bed0e430ab6357f6e93ad6a0c  target/m1r-fault-run/serial.log`（exit 35，total=5 passed=5）
+  - M0R 回归：`71f9cf197d093eb63fe48fcad93277099e2617b6a20e436eff8ff2f8bd605adf  target/m0r-run/serial.log` 字节不变；`make test`（58 例）与 fmt-check 全绿。
+- 本轮根因修复（QEMU 取证 `-d int`）：
+  - CPL0 同特权 `iretq` 只弹 rip/cs/rflags：`.Lreturn_iret` 现将三槽尾上滑越过合成
+    rsp/ss，恢复后 rsp 精确等于 trap 时值（首个内核态定时器 IRQ 曾因 rsp-16 在被中断
+    函数尾声 `ret` 到垃圾地址 → #UD oops）。
+  - boot.S 开启 CR0.WP（PG|WP）使 `_pte_flags` 的 rodata RO 真正生效；boot GDT 迁至
+    .boot.data（CPU 段寄存器加载会 RMW 描述符 A 位，GDT 页必须可写）。
+  - D-2 偏差记录：QEMU 6.2 TCG 对未知 MSR 的 WRMSR/RDMSR 均静默忽略（`-d int` 零
+    #GP 实证），`gp.wrmsr` 不可达；改为 `m1rfault.gp.noncanon`（经 MAGIC_RAX
+    0xcafe… 非规范地址取数 → #GP(0)，TCG/真机确定），kind/ec/魔数寄存器契约不变。
+  - ksym 前缀符号化：m1rfault.S 头部加 `_m1rf_prologue` 垫片，避免首个注入符号与
+    KERNEL_VMA 同址导致 rip 降级符号化；驱动帧 black_box 阻断 LTO 尾跳，backtrace
+    头稳定为 `_m1r_fault_driver_frame+`。
+  - verdict 侧：MAGIC_RSI 补齐位数（原少一组 0）、KERNEL_CS 更正 0x08（GDT code=8）、
+    M1RFault 行解析容忍 GRUB 横幅残留的前导 CR（与 m0r 判定同一工件）。
