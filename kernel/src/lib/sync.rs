@@ -33,6 +33,24 @@ impl<T> Spinlock<T> {
         SpinlockGuard { lock: self }
     }
 
+    /// Acquire without a guard: ownership may be released from another
+    /// context after a scheduler swtch (xv6 forkret/sleep discipline).
+    /// SAFETY: caller must balance with raw_release on the same lock.
+    #[allow(dead_code)] // paired with raw_release; sleep(chan, other_lk) lands in S2
+    pub unsafe fn raw_lock(&self) {
+        self.push_off();
+        while self.locked.swap(1, Ordering::Acquire) == 1 {
+            core::hint::spin_loop();
+        }
+    }
+
+    /// Release without a guard. SAFETY: the lock must be held (the current
+    /// context logically owns it, possibly inherited through a swtch).
+    pub unsafe fn raw_release(&self) {
+        self.locked.store(0, Ordering::Release);
+        self.pop_off();
+    }
+
     fn push_off(&self) {
         pushcli();
     }
@@ -67,10 +85,10 @@ impl<'a, T> Drop for SpinlockGuard<'a, T> {
 
 /// Are interrupts currently enabled?
 pub fn intr_state() -> u32 {
-    let mut flags: u32;
-    // SAFETY: raw pushfl/popfl read.
-    unsafe { core::arch::asm!("pushfl; popl %eax", out("eax") flags, options(att_syntax)) };
-    (flags >> 9) & 1
+    let mut flags: u64;
+    // SAFETY: raw pushfq/popq read (x86_64 RFLAGS).
+    unsafe { core::arch::asm!("pushfq; popq %rax", out("rax") flags, options(att_syntax)) };
+    ((flags >> 9) & 1) as u32
 }
 
 pub fn intr_disable() {
@@ -112,6 +130,7 @@ pub fn popcli() {
 }
 
 /// Current pushcli nesting depth (xv6 mycpu()->ncli).
+#[allow(dead_code)] // xv6 spinlock.c accessor, useful for diagnostics
 pub fn ncli() -> u32 {
     NCLI.load(core::sync::atomic::Ordering::SeqCst)
 }
@@ -122,8 +141,6 @@ pub fn intena() -> u32 {
     INTENA.load(core::sync::atomic::Ordering::SeqCst)
 }
 
-pub use popcli as pop_intr_off;
-pub use pushcli as push_intr_off;
 
 // SAFETY: Spinlock hands out &T only while held (single CPU M1); raw
 // interior mutability is mediated by the lock itself.

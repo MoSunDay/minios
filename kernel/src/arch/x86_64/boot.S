@@ -24,6 +24,10 @@ _low_start:
     leal _low_pdpt, %eax
     orl $3, %eax
     movl %eax, 0(%edi)
+    /* Direct map of all physical RAM at 0xffff_ff00_0000_0000 (PML4[509]). */
+    leal _dm_pdpt, %eax
+    orl $3, %eax
+    movl %eax, 509*8(%edi)
     leal _high_pdpt, %eax
     orl $3, %eax
     movl %eax, 511*8(%edi)
@@ -38,19 +42,32 @@ _low_start:
     orl $3, %eax
     movl %eax, 510*8(%edi)
 
-    /* High half: VMA 0xffffffff80000000 + X maps phys __kernel_phys_text_start + X. */
+    /* High half: VMA 0xffffffff80000000 + X maps phys __kernel_phys_text_start + X.
+     * 32 page tables cover 64 MiB of kernel image with page-granular
+     * permissions (text X/ro, rodata ro/NX, data+bss rw/NX). */
+    xorl %ebx, %ebx
+9:
     leal _high_page_dir, %edi
-    leal _high_page_table, %eax
+    leal _high_page_tables, %eax
+    movl %ebx, %edx
+    shll $12, %edx
+    addl %edx, %eax
     orl $3, %eax
-    movl %eax, 0(%edi)
-    movl $0, 4(%edi)
+    movl %eax, (%edi,%ebx,8)
+    movl $0, 4(%edi,%ebx,8)
 
-    leal _high_page_table, %esi
+    leal _high_page_tables, %esi
+    movl %ebx, %edx
+    shll $12, %edx
+    addl %edx, %esi
     xorl %ecx, %ecx
 8:
     movl $__kernel_phys_text_start, %eax
-    movl %ecx, %edx
-    shll $12, %edx
+    movl %ebx, %edx
+    shll $21, %edx
+    movl %ecx, %ebp
+    shll $12, %ebp
+    addl %ebp, %edx
     addl %edx, %eax
     movl %eax, %ebp
     call _pte_flags
@@ -60,6 +77,31 @@ _low_start:
     incl %ecx
     cmpl $512, %ecx
     jl 8b
+
+    incl %ebx
+    cmpl $32, %ebx
+    jl 9b
+
+    /* Direct map: PDPT[0] -> one page directory, 128 entries x 2 MiB (256 MiB),
+     * supervisor RW, NX. Covers all RAM under QEMU -m 256M. */
+    leal _dm_pdpt, %edi
+    leal _dm_page_dir, %eax
+    orl $3, %eax
+    movl %eax, 0(%edi)
+    movl $0, 4(%edi)
+
+    leal _dm_page_dir, %edi
+    xorl %ecx, %ecx
+    movl $0x80000083, %eax   /* P|RW|PS|NX */
+    movl $0x00000000, %edx
+7:
+    movl %eax, (%edi,%ecx,8)
+    movl %edx, 4(%edi,%ecx,8)
+    addl $0x200000, %eax
+    adcl $0, %edx
+    incl %ecx
+    cmpl $128, %ecx
+    jl 7b
 
     /* Point 128 page directories at 128 page tables (256 MiB, 4 KiB pages). */
     leal _page_dir, %edi
@@ -179,7 +221,11 @@ _high_pdpt:
     .space 4096
 _high_page_dir:
     .space 4096
-_high_page_table:
+_high_page_tables:
+    .space 4096 * 32
+_dm_pdpt:
+    .space 4096
+_dm_page_dir:
     .space 4096
 _page_dir:
     .space 4096
@@ -188,4 +234,5 @@ _page_tables:
 .align 16
 _boot_stack:
     .space 0x10000
+.globl _boot_stack_top
 _boot_stack_top:

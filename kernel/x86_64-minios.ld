@@ -45,6 +45,15 @@ __kernel_phys_rodata_start = __kernel_phys_text_start + SIZEOF(.text);
 .rodata : AT(__kernel_phys_rodata_start) {
     _kernel_rodata_start = .;
     *(.rodata .rodata.*)
+
+    /* M1R UserPtr fault fixup table: (fault_rip, fixup_rip) pairs.
+       Read-only at runtime; bounds exported for the trap handler. */
+    . = ALIGN(8);
+    __fixup_start = .;
+    KEEP(*(.m1r.fixup))
+    . = ALIGN(8);
+    __fixup_end = .;
+
     . = ALIGN(4096);
     _kernel_rodata_end = .;
 }
@@ -53,6 +62,9 @@ __kernel_phys_data_start = __kernel_phys_rodata_start + SIZEOF(.rodata);
 .data : AT(__kernel_phys_data_start) {
     _kernel_data_start = .;
     *(.data .data.*)
+    /* Linker-synthesized GOT (GOTPCREL libcalls to no_mangle mem* under
+       the kernel code model); read-only at runtime. */
+    *(.got .got.*)
     . = ALIGN(4096);
     _kernel_data_end = .;
 }
@@ -65,6 +77,7 @@ __kernel_phys_bss_start = __kernel_phys_data_start + SIZEOF(.data);
     . = ALIGN(4096);
     _kernel_bss_end = .;
 }
+__kernel_phys_end = __kernel_phys_bss_start + SIZEOF(.bss);
 
 /DISCARD/ : {
     *(.eh_frame .eh_frame_hdr)
@@ -72,3 +85,6 @@ __kernel_phys_bss_start = __kernel_phys_data_start + SIZEOF(.data);
     *(.note*)
 }
 }
+
+ASSERT(__kernel_phys_end <= 0x10000000, "kernel physical image exceeds direct map")
+ASSERT(_kernel_bss_start - KERNEL_VMA + __kernel_phys_end - __kernel_phys_bss_start <= 0x4000000, "kernel image exceeds 64 MiB high-half mapping")

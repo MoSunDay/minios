@@ -122,3 +122,80 @@ fn elf_parse_ehdr_and_phdr() {
     bad.magic = 0;
     assert!(!elf::valid_magic(&bad));
 }
+
+// ---- M1R kernel core modules (ksyms / fixup_table / tf_layout) ------------
+
+use super::fixup_table::{self, FixupEntry};
+use super::ksyms::{self, Ksym, KSYM_CAP, KSYM_NAME};
+use super::tf_layout::Trapframe;
+
+fn sym(addr: u64, name: &str) -> Ksym {
+    let mut n = [0u8; KSYM_NAME];
+    n[..name.len()].copy_from_slice(name.as_bytes());
+    Ksym { addr, name: n }
+}
+
+#[test]
+fn ksyms_lookup_bounds_and_offsets() {
+    let table = [sym(0x1000, "first"), sym(0x2000, "mid"), sym(0x3000, "last")];
+    // Exact hits and in-between addresses resolve to the previous symbol.
+    let (off, s) = ksyms::lookup(&table, 0x1000).expect("first");
+    assert_eq!((off, s.name_str()), (0, "first"));
+    let (off, s) = ksyms::lookup(&table, 0x2abc).expect("mid");
+    assert_eq!((off, s.name_str()), (0xabc, "mid"));
+    let (off, _) = ksyms::lookup(&table, 0x3fff).expect("last");
+    assert_eq!(off, 0xfff);
+    // Before the first symbol or empty table: no hit.
+    assert!(ksyms::lookup(&table, 0xfff).is_none());
+    assert!(ksyms::lookup(&[], 0x2000).is_none());
+    // Capacity contract from the generator (fixed-size, convergent table).
+    assert_eq!(KSYM_CAP, 2048);
+    assert_eq!(KSYM_NAME, 56);
+}
+
+#[test]
+fn ksyms_symbolize_format() {
+    let table = [sym(0xffff_8000_0010_0000, "rust_main")];
+    let mut out = [0u8; 96];
+    let n = ksyms::symbolize_into(&table, 0xffff_8000_0010_0042, &mut out);
+    assert_eq!(&out[..n], b"rust_main+0x42");
+    let n = ksyms::symbolize_into(&table, 0x0, &mut out);
+    // Unknown addresses print as ?0xADDR (hex, no sign issues).
+    assert!(out[..n].starts_with(b"?0x"), "{:?}", &out[..n]);
+}
+
+#[test]
+fn fixup_table_lookup_exact_rip() {
+    let table = [
+        FixupEntry { fault_rip: 0x1000, fixup_rip: 0x2000 },
+        FixupEntry { fault_rip: 0x1800, fixup_rip: 0x2800 },
+    ];
+    assert_eq!(fixup_table::lookup(&table, 0x1000), Some(0x2000));
+    assert_eq!(fixup_table::lookup(&table, 0x1800), Some(0x2800));
+    // Only exact RIPs match (linear scan, no ranges).
+    assert_eq!(fixup_table::lookup(&table, 0x1001), None);
+    assert_eq!(fixup_table::lookup(&[], 0x1000), None);
+}
+
+#[test]
+fn tf_layout_frozen_offsets() {
+    // The asm twins in trapasm.S read these exact offsets.
+    assert_eq!(core::mem::size_of::<Trapframe>(), 176);
+    assert_eq!(core::mem::offset_of!(Trapframe, rdi), 0);
+    assert_eq!(core::mem::offset_of!(Trapframe, r15), 112);
+    assert_eq!(core::mem::offset_of!(Trapframe, vector), 120);
+    assert_eq!(core::mem::offset_of!(Trapframe, err), 128);
+    assert_eq!(core::mem::offset_of!(Trapframe, rip), 136);
+    assert_eq!(core::mem::offset_of!(Trapframe, cs), 144);
+    assert_eq!(core::mem::offset_of!(Trapframe, rflags), 152);
+    assert_eq!(core::mem::offset_of!(Trapframe, rsp), 160);
+    assert_eq!(core::mem::offset_of!(Trapframe, ss), 168);
+    let mut tf = Trapframe {
+        rdi: 0, rsi: 0, rdx: 0, rcx: 0, rax: 0, r8: 0, r9: 0, r10: 0, r11: 0,
+        rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0,
+        vector: 0x80, err: 0, rip: 0, cs: 0x33, rflags: 0x202, rsp: 0, ss: 0x2b,
+    };
+    assert!(tf.from_user());
+    tf.cs = 0x08;
+    assert!(!tf.from_user());
+}

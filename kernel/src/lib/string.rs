@@ -117,6 +117,7 @@ pub fn strncmp(p: *const u8, q: *const u8, n: usize) -> i32 {
 }
 
 /// safestrcpy: like strncpy but guaranteed to NUL-terminate (string.c:75).
+#[allow(dead_code)] // xv6 str API, exercised by host-tests
 pub fn safestrcpy(s: *mut u8, t: *const u8, n: i32) -> *mut u8 {
     // SAFETY: caller guarantees n writable bytes at s and a NUL-terminated
     // readable string at t.

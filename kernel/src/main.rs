@@ -1,136 +1,111 @@
+//! Dual-mode kernel entry (D5): the Multiboot cmdline selects the boot
+//! path. No cmdline (the frozen M0R ISO) or `m0r-smoke` keeps the frozen
+//! M0R byte-identical smoke; `m1r-suite` / `m1r-fault` select the M1R
+//! paths; any other cmdline boots the full system (sh, from S4 on).
+
 #![no_std]
 #![no_main]
 
 mod arch;
+mod console;
+mod drivers;
+mod kernel;
+#[path = "lib/mod.rs"]
+mod klib;
+mod mm;
+mod multiboot;
+mod proc;
 
-use arch::console;
-use arch::cpu;
-use arch::io;
-use arch::{KERNEL_VMA, PAGE_NX, PAGE_PRESENT, PAGE_WRITE};
+use kernel::ksymtab;
+use multiboot::cmdline;
 
-#[no_mangle]
-static M0R_RODATA: u8 = 0x3c;
+unsafe extern "C" {
+    static _boot_stack_top: u8;
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main(multiboot_magic: u32, multiboot_info_phys: usize) {
     console::init_serial();
-    cpu::init();
-    console::write_str("minios x86_64 M0R boot\n");
-    console::write_str("multiboot_info=");
-    console::write_hex(multiboot_info_phys);
-    console::write_str("\n");
-
-    let mut total = 0;
-    let mut passed = 0;
-
-    total += 1;
-    if run_case("m0r.multiboot", multiboot_magic == 0x2bad_b002) {
-        passed += 1;
-    }
-    let checks: [(&str, fn() -> bool); 5] = [
-        ("m0r.long_mode", || {
-            (rust_main as *const () as usize) >= KERNEL_VMA
-        }),
-        ("m0r.low_identity", low_identity_readable),
-        ("m0r.text_permissions", text_permissions_executable),
-        ("m0r.rodata_permissions", rodata_permissions_protected),
-        ("m0r.data_permissions", data_permissions_protected),
-    ];
-    for (case_id, check) in checks {
-        total += 1;
-        if run_case(case_id, check()) {
-            passed += 1;
+    // Panic markers name the active suite; the M0R default is frozen.
+    ksymtab::set_active_suite("m0r");
+    match boot_mode(multiboot_info_phys) {
+        BootMode::M0rSmoke => {
+            arch::x86_64::cpu::init(core::ptr::addr_of!(_boot_stack_top) as usize);
+            kernel::m0r::run(multiboot_magic, multiboot_info_phys);
         }
+        mode => m1r_boot(mode, multiboot_magic, multiboot_info_phys),
     }
+}
 
-    let failed = total - passed;
-    if failed == 0 {
-        console::write_str("MINIOS_X86_64_TEST_PASS_V1 suite=m0r run=core-up total=");
+enum BootMode {
+    M0rSmoke,
+    M1rSuite,
+    M1rFault,
+    Full,
+}
+
+fn boot_mode(mbi_phys: usize) -> BootMode {
+    let cmd = cmdline(mbi_phys);
+    if cmd.contains("m1r-suite") {
+        BootMode::M1rSuite
+    } else if cmd.contains("m1r-fault") {
+        BootMode::M1rFault
+    } else if cmd.is_empty() || cmd.contains("m0r-smoke") {
+        BootMode::M0rSmoke
     } else {
-        console::write_str("MINIOS_X86_64_TEST_FAIL_V1 suite=m0r run=core-up total=");
+        BootMode::Full
     }
-    write_decimal(total);
-    console::write_str(" passed=");
-    write_decimal(passed);
-    console::write_str(" failed=");
-    write_decimal(failed);
-    console::write_str(" skipped=0\n");
-    io::out32(0xf4, if failed == 0 { 0x10 } else { 0x11 });
-    loop {}
 }
 
-fn run_case(case_id: &str, passed: bool) -> bool {
-    console::write_str("CASE ");
-    console::write_str(case_id);
-    console::write_str(if passed { " PASS\n" } else { " FAIL\n" });
-    passed
-}
-
-fn write_decimal(value: u8) {
-    const DIGITS: &[u8; 10] = b"0123456789";
-    if value >= 10 {
-        console::write_byte(DIGITS[usize::from(value / 10)]);
+fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
+    use arch::x86_64::io;
+    if multiboot_magic != 0x2bad_b002 {
+        m1r_fatal("not loaded by Multiboot");
     }
-    console::write_byte(DIGITS[usize::from(value % 10)]);
-}
-
-fn low_identity_readable() -> bool {
-    const BOOT_START: *const u8 = 0x0010_0000 as *const u8;
-    // SAFETY: the low boot block remains mapped readable by the boot page tables.
-    let first = unsafe { core::ptr::read_volatile(BOOT_START) };
-    first == 0x02
-}
-fn text_permissions_executable() -> bool {
-    matches!(translate(rust_main as *const () as usize),
-        Some((_, flags)) if flags & PAGE_PRESENT != 0
-            && flags & PAGE_WRITE == 0 && flags & PAGE_NX == 0)
-}
-
-fn rodata_permissions_protected() -> bool {
-    matches!(translate(core::ptr::addr_of!(M0R_RODATA) as usize),
-        Some((_, flags)) if flags & PAGE_PRESENT != 0
-            && flags & PAGE_WRITE == 0 && flags & PAGE_NX != 0)
-}
-
-fn data_permissions_protected() -> bool {
-    matches!(translate(core::ptr::addr_of!(arch::DATA_SENTINEL) as usize),
-        Some((_, flags)) if flags & PAGE_PRESENT != 0
-            && flags & PAGE_WRITE != 0 && flags & PAGE_NX != 0)
-}
-
-fn table_entry(table: usize, index: usize) -> u64 {
-    // SAFETY: boot page tables are addressed through the low identity mapping.
-    unsafe { core::ptr::read_volatile((table + index * 8) as *const u64) }
-}
-
-fn translate(virtual_address: usize) -> Option<(usize, u64)> {
-    const PML4_ADDRESS: usize = 0x0020_0000;
-    let pml4 = PML4_ADDRESS;
-    let pml4e = table_entry(pml4, (virtual_address >> 39) & 0x1ff);
-    if pml4e & PAGE_PRESENT == 0 {
-        return None;
+    // One-shot boot context, single CPU, interrupts off.
+    arch::x86_64::cpu::init(core::ptr::addr_of!(_boot_stack_top) as usize);
+    kernel::traps::init_idt();
+    drivers::pic::init();
+    kernel::time::init_pit();
+    drivers::pic::unmask(0); // timer only
+    proc::fpu::init_fpu();
+    mm::frame::init(mbi_phys);
+    mm::pgtable::set_boot_pml4(io::in64_cr3() as usize);
+    match mode {
+        BootMode::M1rFault => {
+            ksymtab::set_active_suite("m1r-fault");
+            m1r_fatal("m1r-fault suite not wired yet");
+        }
+        BootMode::M1rSuite => ksymtab::set_active_suite("m1r"),
+        BootMode::Full => ksymtab::set_active_suite("minios"),
+        BootMode::M0rSmoke => unreachable!(),
     }
-    let pdpt = (pml4e & 0x000f_ffff_ffff_f000) as usize;
-    let pdpte = table_entry(pdpt, (virtual_address >> 30) & 0x1ff);
-    if pdpte & PAGE_PRESENT == 0 {
-        return None;
+    // The embedded init ELF arrives with the S3 userspace chain.
+    if !proc::proc::userinit(b"") {
+        m1r_fatal("init image not embedded yet");
     }
-    let directory = (pdpte & 0x000f_ffff_ffff_f000) as usize;
-    let directory_entry = table_entry(directory, (virtual_address >> 21) & 0x1ff);
-    if directory_entry & PAGE_PRESENT == 0 {
-        return None;
+    proc::sched::scheduler();
+}
+
+fn m1r_fatal(why: &str) -> ! {
+    console::write_str("MINIOS_X86_64_TEST_FATAL_V1 suite=");
+    console::write_str(ksymtab::active_suite());
+    console::write_str(" run=core-up reason=");
+    console::write_str(why);
+    console::write_str("\n");
+    arch::x86_64::io::out32(0xf4, 0x12);
+    loop {
+        arch::x86_64::io::hlt();
     }
-    let table = (directory_entry & 0x000f_ffff_ffff_f000) as usize;
-    let leaf = table_entry(table, (virtual_address >> 12) & 0x1ff);
-    if leaf & PAGE_PRESENT == 0 {
-        return None;
-    }
-    Some(((leaf & 0x000f_ffff_ffff_f000) as usize, leaf))
 }
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
-    console::write_str("MINIOS_X86_64_TEST_FATAL_V1 suite=m0r run=core-up reason=panic\n");
-    io::out32(0xf4, 0x12);
-    loop {}
+    console::write_str("MINIOS_X86_64_TEST_FATAL_V1 suite=");
+    console::write_str(ksymtab::active_suite());
+    console::write_str(" run=core-up reason=panic\n");
+    arch::x86_64::io::out32(0xf4, 0x12);
+    loop {
+        arch::x86_64::io::hlt();
+    }
 }

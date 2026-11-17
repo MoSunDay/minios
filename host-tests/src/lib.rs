@@ -11,6 +11,12 @@ pub mod bitmap;
 pub mod elf;
 #[path = "../../kernel/src/lib/string.rs"]
 pub mod string;
+#[path = "../../kernel/src/kernel/ksyms.rs"]
+pub mod ksyms;
+#[path = "../../kernel/src/kernel/fixup_table.rs"]
+pub mod fixup_table;
+#[path = "../../kernel/src/kernel/tf_layout.rs"]
+pub mod tf_layout;
 
 #[cfg(test)]
 mod tests;

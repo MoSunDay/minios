@@ -25,8 +25,15 @@ GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial ech
 
 all: build check-layout
 
+# ksymtab convergence (kernel/build.rs): the generated table is size-fixed,
+# so the kernel hash stabilizes after the ELF exists; loop <= 3 passes.
 build:
-	cargo build --locked --release -p minios-kernel
+	@prev=""; for i in 1 2 3; do \
+	  cargo build --locked --release -p minios-kernel || exit 1; \
+	  cur=$$(sha256sum $(KERNEL) | cut -d' ' -f1); \
+	  if [ "$$cur" = "$$prev" ]; then exit 0; fi; \
+	  prev="$$cur"; \
+	done; echo "kernel build did not converge (ksymtab)"; exit 1
 
 # Static Multiboot1/ELF64 layout gate (Rust verdict, ADR-0013).
 check-layout: build
