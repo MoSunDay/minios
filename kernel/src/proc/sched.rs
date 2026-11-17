@@ -11,7 +11,7 @@ use core::arch::global_asm;
 use core::ptr::addr_of_mut;
 
 use super::proc::myproc;
-use super::{fpu, Context, Proc, ProcState, PTABLE_LOCK, NPROC};
+use super::{fpu, Context, Proc, ProcState, NPROC, PTABLE_LOCK};
 use crate::arch::x86_64::{cpu, io};
 use crate::mm::pgtable;
 
@@ -142,4 +142,3 @@ pub fn scheduler() -> ! {
         }
     }
 }
-

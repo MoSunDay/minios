@@ -68,20 +68,22 @@ pub static mut KSTACKS: [KstackBuf; NPROC] = [const { KstackBuf([0; KSTACKSIZE])
 
 /// The xv6 ptable: one flat array + one lock whose ownership transfers
 /// across scheduler swtches (see sched.rs and sleep.rs).
-pub static mut PTABLE: [Proc; NPROC] = [const { Proc {
-    state: ProcState::UNUSED,
-    pid: 0,
-    parent: core::ptr::null_mut(),
-    mm: None,
-    tf: core::ptr::null_mut(),
-    context: Context::ZERO,
-    chan: 0,
-    killed: 0,
-    xstate: 0,
-    fpu: FpuArea([0; 512]),
-    cwd: 0,
-    name: [0; 16],
-} }; NPROC];
+pub static mut PTABLE: [Proc; NPROC] = [const {
+    Proc {
+        state: ProcState::UNUSED,
+        pid: 0,
+        parent: core::ptr::null_mut(),
+        mm: None,
+        tf: core::ptr::null_mut(),
+        context: Context::ZERO,
+        chan: 0,
+        killed: 0,
+        xstate: 0,
+        fpu: FpuArea([0; 512]),
+        cwd: 0,
+        name: [0; 16],
+    }
+}; NPROC];
 
 pub static PTABLE_LOCK: Spinlock<()> = Spinlock::new("ptable", ());
 

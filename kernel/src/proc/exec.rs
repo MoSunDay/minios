@@ -85,7 +85,10 @@ unsafe fn write_user(pml4: pgtable::PtPtr, va: usize, src: &[u8]) {
     while off < src.len() {
         let page_va = pgtable::pgrounddown(va + off);
         let pte = pgtable::walk(pml4, page_va, false);
-        assert!(!pte.is_null() && (*pte & PTE_P) != 0, "exec: unmapped segment page");
+        assert!(
+            !pte.is_null() && (*pte & PTE_P) != 0,
+            "exec: unmapped segment page"
+        );
         let base = p2v((*pte & pgtable::PTE_ADDR) as usize);
         let in_page = (va + off) - page_va;
         let n = (PGSIZE - in_page).min(src.len() - off);
@@ -220,7 +223,12 @@ unsafe fn build_stack(pml4: pgtable::PtPtr, argv: &[&[u8]]) -> Result<usize, i64
 ///
 /// # Safety
 /// `p` is owned or current; when current, CR3 must not be `p`'s new pml4.
-pub unsafe fn exec_elf(p: *mut Proc, tf: &mut Trapframe, image: &[u8], argv: &[&[u8]]) -> Result<(), i64> {
+pub unsafe fn exec_elf(
+    p: *mut Proc,
+    tf: &mut Trapframe,
+    image: &[u8],
+    argv: &[&[u8]],
+) -> Result<(), i64> {
     let (entry, phoff, phnum) = parse_ehdr(image)?;
     const MAX_SEGS: usize = 16;
     if phnum > MAX_SEGS {
@@ -236,7 +244,13 @@ pub unsafe fn exec_elf(p: *mut Proc, tf: &mut Trapframe, image: &[u8], argv: &[&
         if ph.p_type != PT_LOAD {
             continue;
         }
-        let rec = [ph.p_vaddr as usize, ph.p_offset as usize, ph.p_filesz as usize, ph.p_memsz as usize, ph.p_flags as usize];
+        let rec = [
+            ph.p_vaddr as usize,
+            ph.p_offset as usize,
+            ph.p_filesz as usize,
+            ph.p_memsz as usize,
+            ph.p_flags as usize,
+        ];
         let mut j = nsegs;
         while j > 0 && segs[j - 1][0] > rec[0] {
             segs[j] = segs[j - 1];

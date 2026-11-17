@@ -3,7 +3,6 @@
 //! The ONE header lives in boot.S (`.multiboot_header`, frozen flags 0x3);
 //! this module only parses the loader-provided info block.
 
-
 /// Magic passed in EAX by the loader (loader -> kernel).
 #[allow(dead_code)] // m0r compares the raw literal for byte-identity
 pub const BOOT_LOADER_MAGIC: u32 = 0x2BADB002;

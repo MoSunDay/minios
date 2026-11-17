@@ -5,7 +5,7 @@ use core::ptr::{addr_of, addr_of_mut, null_mut};
 use core::sync::atomic::{AtomicI32, Ordering};
 
 use super::sched;
-use super::{exec, fpu, KSTACKS, KSTACKSIZE, Proc, ProcState, PTABLE, PTABLE_LOCK, NPROC};
+use super::{exec, fpu, Proc, ProcState, KSTACKS, KSTACKSIZE, NPROC, PTABLE, PTABLE_LOCK};
 use crate::kernel::traps::{Trapframe, T_SYSCALL};
 
 unsafe extern "C" {
@@ -63,7 +63,9 @@ pub unsafe fn allocproc() -> *mut Proc {
         let tf = kstack_tf(p);
         let ctx_sp = tf as usize - 64;
         // SAFETY: freshly owned kernel stack bytes.
-        unsafe { core::ptr::write_bytes(ctx_sp as *mut u8, 0, 64 + core::mem::size_of::<Trapframe>()) };
+        unsafe {
+            core::ptr::write_bytes(ctx_sp as *mut u8, 0, 64 + core::mem::size_of::<Trapframe>())
+        };
         unsafe {
             *(ctx_sp as *mut usize).add(6) = sched::forkret as *const () as usize;
             *(ctx_sp as *mut usize).add(7) = _trapret_user as *const () as usize;

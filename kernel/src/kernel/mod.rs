@@ -2,8 +2,8 @@
 
 pub mod fixup;
 pub mod fixup_table;
-pub mod ksymtab;
 pub mod ksyms;
+pub mod ksymtab;
 pub mod m0r;
 pub mod oops;
 pub mod syscall;

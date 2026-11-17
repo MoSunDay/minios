@@ -137,7 +137,11 @@ fn sym(addr: u64, name: &str) -> Ksym {
 
 #[test]
 fn ksyms_lookup_bounds_and_offsets() {
-    let table = [sym(0x1000, "first"), sym(0x2000, "mid"), sym(0x3000, "last")];
+    let table = [
+        sym(0x1000, "first"),
+        sym(0x2000, "mid"),
+        sym(0x3000, "last"),
+    ];
     // Exact hits and in-between addresses resolve to the previous symbol.
     let (off, s) = ksyms::lookup(&table, 0x1000).expect("first");
     assert_eq!((off, s.name_str()), (0, "first"));
@@ -167,8 +171,14 @@ fn ksyms_symbolize_format() {
 #[test]
 fn fixup_table_lookup_exact_rip() {
     let table = [
-        FixupEntry { fault_rip: 0x1000, fixup_rip: 0x2000 },
-        FixupEntry { fault_rip: 0x1800, fixup_rip: 0x2800 },
+        FixupEntry {
+            fault_rip: 0x1000,
+            fixup_rip: 0x2000,
+        },
+        FixupEntry {
+            fault_rip: 0x1800,
+            fixup_rip: 0x2800,
+        },
     ];
     assert_eq!(fixup_table::lookup(&table, 0x1000), Some(0x2000));
     assert_eq!(fixup_table::lookup(&table, 0x1800), Some(0x2800));
@@ -191,9 +201,28 @@ fn tf_layout_frozen_offsets() {
     assert_eq!(core::mem::offset_of!(Trapframe, rsp), 160);
     assert_eq!(core::mem::offset_of!(Trapframe, ss), 168);
     let mut tf = Trapframe {
-        rdi: 0, rsi: 0, rdx: 0, rcx: 0, rax: 0, r8: 0, r9: 0, r10: 0, r11: 0,
-        rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0,
-        vector: 0x80, err: 0, rip: 0, cs: 0x33, rflags: 0x202, rsp: 0, ss: 0x2b,
+        rdi: 0,
+        rsi: 0,
+        rdx: 0,
+        rcx: 0,
+        rax: 0,
+        r8: 0,
+        r9: 0,
+        r10: 0,
+        r11: 0,
+        rbx: 0,
+        rbp: 0,
+        r12: 0,
+        r13: 0,
+        r14: 0,
+        r15: 0,
+        vector: 0x80,
+        err: 0,
+        rip: 0,
+        cs: 0x33,
+        rflags: 0x202,
+        rsp: 0,
+        ss: 0x2b,
     };
     assert!(tf.from_user());
     tf.cs = 0x08;

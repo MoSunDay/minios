@@ -9,14 +9,22 @@ pub const PIC2_DATA: u16 = 0xA1;
 
 /// Remap both PICs so IRQ0..15 appear as vectors 0x20..0x2F.
 pub fn init() {
-    io::out8(PIC1_CMD, 0x11); io::io_wait();
-    io::out8(PIC2_CMD, 0x11); io::io_wait();
-    io::out8(PIC1_DATA, 0x20); io::io_wait(); // ICW2: master base 0x20
-    io::out8(PIC2_DATA, 0x28); io::io_wait(); // ICW2: slave base 0x28
-    io::out8(PIC1_DATA, 0x04); io::io_wait(); // ICW3: slave on IRQ2
-    io::out8(PIC2_DATA, 0x02); io::io_wait();
-    io::out8(PIC1_DATA, 0x01); io::io_wait(); // ICW4: 8086 mode
-    io::out8(PIC2_DATA, 0x01); io::io_wait();
+    io::out8(PIC1_CMD, 0x11);
+    io::io_wait();
+    io::out8(PIC2_CMD, 0x11);
+    io::io_wait();
+    io::out8(PIC1_DATA, 0x20);
+    io::io_wait(); // ICW2: master base 0x20
+    io::out8(PIC2_DATA, 0x28);
+    io::io_wait(); // ICW2: slave base 0x28
+    io::out8(PIC1_DATA, 0x04);
+    io::io_wait(); // ICW3: slave on IRQ2
+    io::out8(PIC2_DATA, 0x02);
+    io::io_wait();
+    io::out8(PIC1_DATA, 0x01);
+    io::io_wait(); // ICW4: 8086 mode
+    io::out8(PIC2_DATA, 0x01);
+    io::io_wait();
     // Mask everything; unmask per line as drivers come up.
     io::out8(PIC1_DATA, 0xFF);
     io::out8(PIC2_DATA, 0xFF);

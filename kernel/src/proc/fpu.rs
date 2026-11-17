@@ -15,7 +15,7 @@ pub fn init_fpu() {
         asm!("movq %rax, %cr0", in("rax") cr0, options(att_syntax, nomem));
         let mut cr4: u64;
         asm!("movq %cr4, %rax", out("rax") cr4, options(att_syntax, nomem, nostack));
-        cr4 |= 1 << 9;  // OSFXSR
+        cr4 |= 1 << 9; // OSFXSR
         cr4 |= 1 << 10; // OSXMMEXCPT
         asm!("movq %rax, %cr4", in("rax") cr4, options(att_syntax, nomem));
     }

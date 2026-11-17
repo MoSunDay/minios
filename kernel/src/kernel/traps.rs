@@ -8,8 +8,14 @@ pub use super::tf_layout::Trapframe;
 use crate::arch::x86_64::cpu;
 use crate::arch::x86_64::io;
 
-global_asm!(include_str!("../arch/x86_64/trapasm.S"), options(att_syntax));
-global_asm!(include_str!("../arch/x86_64/trapcommon.S"), options(att_syntax));
+global_asm!(
+    include_str!("../arch/x86_64/trapasm.S"),
+    options(att_syntax)
+);
+global_asm!(
+    include_str!("../arch/x86_64/trapcommon.S"),
+    options(att_syntax)
+);
 
 /// Vector numbers used by this kernel.
 #[allow(dead_code)] // S2 dispatch / S4 devices
@@ -81,15 +87,17 @@ struct IdtDescriptor {
 }
 
 static mut IDT: Idt = Idt {
-    gates: [const { IdtGate {
-        low: 0,
-        selector: 0,
-        ist: 0,
-        type_attr: 0,
-        middle: 0,
-        high: 0,
-        reserved: 0,
-    } }; 256],
+    gates: [const {
+        IdtGate {
+            low: 0,
+            selector: 0,
+            ist: 0,
+            type_attr: 0,
+            middle: 0,
+            high: 0,
+            reserved: 0,
+        }
+    }; 256],
 };
 static mut IDTR: IdtDescriptor = IdtDescriptor { limit: 0, base: 0 };
 

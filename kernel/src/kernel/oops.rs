@@ -127,7 +127,18 @@ pub fn kernel_fault(tf: &Trapframe, why: &str) -> ! {
     console::write_str("minios kernel oops: ");
     console::write_str(why);
     console::write_str("\n");
-    fault_line("kernel-oops", if tf.vector == T_PGFLT { "PF" } else if tf.vector == T_GPFLT { "GP" } else { "EX" }, tf, cr2);
+    fault_line(
+        "kernel-oops",
+        if tf.vector == T_PGFLT {
+            "PF"
+        } else if tf.vector == T_GPFLT {
+            "GP"
+        } else {
+            "EX"
+        },
+        tf,
+        cr2,
+    );
     if tf.vector == T_PGFLT {
         console::write_str("  fault-kind: ");
         console::write_str(pf_ec_string(tf.err));
@@ -145,7 +156,13 @@ pub fn kernel_fault(tf: &Trapframe, why: &str) -> ! {
 /// User-mode fault: shorter oops line, then the caller kills the process.
 pub fn user_fault(tf: &Trapframe, vector: u64) {
     let cr2 = crate::arch::x86_64::io::in64_cr2();
-    let kind = if vector == T_PGFLT { "PF" } else if vector == T_GPFLT { "GP" } else { "EX" };
+    let kind = if vector == T_PGFLT {
+        "PF"
+    } else if vector == T_GPFLT {
+        "GP"
+    } else {
+        "EX"
+    };
     fault_line("user-fault", kind, tf, cr2);
     if vector == T_PGFLT {
         console::write_str("  fault-kind: ");

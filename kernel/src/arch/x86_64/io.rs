@@ -69,7 +69,9 @@ pub fn sti() {
 pub fn intr_state() -> bool {
     let flags: u64;
     // SAFETY: raw pushfq/popq read.
-    unsafe { core::arch::asm!("pushfq; popq %rax", out("rax") flags, options(att_syntax, nomem, nostack)) };
+    unsafe {
+        core::arch::asm!("pushfq; popq %rax", out("rax") flags, options(att_syntax, nomem, nostack))
+    };
     flags & 0x200 != 0
 }
 
@@ -121,14 +123,18 @@ pub const MSR_FMASK: u32 = 0xC000_0084;
 pub fn in64_cr2() -> u64 {
     let value: u64;
     // SAFETY: control-register read.
-    unsafe { core::arch::asm!("movq %cr2, %rax", out("rax") value, options(att_syntax, nomem, nostack)) };
+    unsafe {
+        core::arch::asm!("movq %cr2, %rax", out("rax") value, options(att_syntax, nomem, nostack))
+    };
     value
 }
 
 pub fn in64_cr3() -> u64 {
     let value: u64;
     // SAFETY: control-register read.
-    unsafe { core::arch::asm!("movq %cr3, %rax", out("rax") value, options(att_syntax, nomem, nostack)) };
+    unsafe {
+        core::arch::asm!("movq %cr3, %rax", out("rax") value, options(att_syntax, nomem, nostack))
+    };
     value
 }
 
@@ -140,5 +146,7 @@ pub fn set_cr3(value: u64) {
 #[allow(dead_code)] // S2 partial unmap paths
 pub fn invlpg(addr: u64) {
     // SAFETY: TLB invalidate for one page.
-    unsafe { core::arch::asm!("invlpg (%rax)", in("rax") addr, options(att_syntax, preserves_flags, nomem, nostack)) };
+    unsafe {
+        core::arch::asm!("invlpg (%rax)", in("rax") addr, options(att_syntax, preserves_flags, nomem, nostack))
+    };
 }

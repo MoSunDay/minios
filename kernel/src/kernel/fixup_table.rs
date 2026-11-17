@@ -12,5 +12,8 @@ pub struct FixupEntry {
 /// Pure predicate form used by host unit tests over an explicit table.
 #[allow(dead_code)] // pure form exercised by host-tests
 pub fn lookup(table: &[FixupEntry], rip: u64) -> Option<u64> {
-    table.iter().find(|e| e.fault_rip == rip).map(|e| e.fixup_rip)
+    table
+        .iter()
+        .find(|e| e.fault_rip == rip)
+        .map(|e| e.fixup_rip)
 }

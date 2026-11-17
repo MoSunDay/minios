@@ -41,7 +41,14 @@ impl Mm {
             // SAFETY: fresh page.
             unsafe {
                 crate::klib::string::memset(page, 0, PGSIZE);
-                if pgtable::mappages(self.pml4, a, PGSIZE, v2p(page as usize), pgtable::PTE_W | pgtable::PTE_U) < 0 {
+                if pgtable::mappages(
+                    self.pml4,
+                    a,
+                    PGSIZE,
+                    v2p(page as usize),
+                    pgtable::PTE_W | pgtable::PTE_U,
+                ) < 0
+                {
                     kfree(page);
                     return 0;
                 }
@@ -90,7 +97,10 @@ impl Mm {
         if dst.is_null() {
             return None;
         }
-        Some(Mm { pml4: dst, sz: self.sz })
+        Some(Mm {
+            pml4: dst,
+            sz: self.sz,
+        })
     }
 
     /// Load one zeroed RW|U page at `va` (stack page install).
@@ -103,7 +113,14 @@ impl Mm {
         // SAFETY: fresh page.
         unsafe {
             crate::klib::string::memset(page, 0, PGSIZE);
-            if pgtable::mappages(self.pml4, va, PGSIZE, v2p(page as usize), pgtable::PTE_W | pgtable::PTE_U) < 0 {
+            if pgtable::mappages(
+                self.pml4,
+                va,
+                PGSIZE,
+                v2p(page as usize),
+                pgtable::PTE_W | pgtable::PTE_U,
+            ) < 0
+            {
                 kfree(page);
                 return false;
             }
@@ -111,4 +128,3 @@ impl Mm {
         true
     }
 }
-

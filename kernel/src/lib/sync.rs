@@ -141,7 +141,6 @@ pub fn intena() -> u32 {
     INTENA.load(core::sync::atomic::Ordering::SeqCst)
 }
 
-
 // SAFETY: Spinlock hands out &T only while held (single CPU M1); raw
 // interior mutability is mediated by the lock itself.
 unsafe impl<T: Send> Sync for Spinlock<T> {}

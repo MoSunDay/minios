@@ -212,8 +212,18 @@ pub unsafe fn copy_user_half(src: PtPtr) -> PtPtr {
                             p2v((spe & PTE_ADDR) as usize) as *mut u8,
                             PGSIZE,
                         );
-                        let va = ((i as u64) << 39 | (j as u64) << 30 | (k as u64) << 21 | (l as u64) << 12) as usize;
-                        if mappages(dst, va, PGSIZE, v2p(newp as usize), spe & (PTE_W | PTE_U | PTE_NX)) < 0 {
+                        let va = ((i as u64) << 39
+                            | (j as u64) << 30
+                            | (k as u64) << 21
+                            | (l as u64) << 12) as usize;
+                        if mappages(
+                            dst,
+                            va,
+                            PGSIZE,
+                            v2p(newp as usize),
+                            spe & (PTE_W | PTE_U | PTE_NX),
+                        ) < 0
+                        {
                             free_user_pml4(dst);
                             failed = true;
                             break 'outer;
@@ -228,4 +238,3 @@ pub unsafe fn copy_user_half(src: PtPtr) -> PtPtr {
     }
     dst
 }
-

@@ -3,7 +3,10 @@
 
 use core::arch::global_asm;
 
-global_asm!(include_str!("../arch/x86_64/uaccess.S"), options(att_syntax));
+global_asm!(
+    include_str!("../arch/x86_64/uaccess.S"),
+    options(att_syntax)
+);
 
 pub const EFAULT: i64 = -14;
 pub const ENAMETOOLONG: i64 = -36;

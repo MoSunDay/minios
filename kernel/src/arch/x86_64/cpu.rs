@@ -12,7 +12,10 @@ use core::arch::asm;
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use super::io::{rdmsr, wrmsr, MSR_EFER, MSR_FMASK, MSR_IA32_GS_BASE, MSR_IA32_KERNEL_GS_BASE, MSR_LSTAR, MSR_STAR};
+use super::io::{
+    rdmsr, wrmsr, MSR_EFER, MSR_FMASK, MSR_IA32_GS_BASE, MSR_IA32_KERNEL_GS_BASE, MSR_LSTAR,
+    MSR_STAR,
+};
 use crate::kernel::traps::syscall_entry;
 
 pub const SEL_KCODE: u16 = 0x08;
@@ -124,7 +127,9 @@ pub fn init(kernel_stack_top: usize) {
         asm!("mov $0x38, %ax\n\tltr %ax", out("ax") _, options(att_syntax, nostack));
 
         (*core::ptr::addr_of_mut!(PERCPU)).cpu = addr_of_mut!(PERCPU);
-        (*core::ptr::addr_of_mut!(PERCPU)).kernel_rsp.store(kernel_stack_top as u64, Ordering::SeqCst);
+        (*core::ptr::addr_of_mut!(PERCPU))
+            .kernel_rsp
+            .store(kernel_stack_top as u64, Ordering::SeqCst);
         // While in the kernel GS.base points at PERCPU; the swapped-out
         // value (IA32_KERNEL_GS_BASE) is the user's, zero for M1R.
         wrmsr(MSR_IA32_GS_BASE, addr_of_mut!(PERCPU) as u64);
@@ -148,7 +153,9 @@ pub fn set_kernel_stack(top: usize) {
     // SAFETY: single CPU, caller holds the switch context.
     unsafe {
         TSS.privilege_stacks[0] = top as u64;
-        (*core::ptr::addr_of_mut!(PERCPU)).kernel_rsp.store(top as u64, Ordering::SeqCst);
+        (*core::ptr::addr_of_mut!(PERCPU))
+            .kernel_rsp
+            .store(top as u64, Ordering::SeqCst);
     }
 }
 

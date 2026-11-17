@@ -41,4 +41,3 @@ pub fn apply(tf: &mut Trapframe) -> bool {
     }
     false
 }
-

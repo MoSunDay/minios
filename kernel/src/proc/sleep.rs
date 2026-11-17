@@ -9,7 +9,7 @@
 use core::ptr::from_ref;
 
 use super::proc::myproc;
-use super::{ProcState, PTABLE_LOCK, NPROC};
+use super::{ProcState, NPROC, PTABLE_LOCK};
 use crate::klib::sync::Spinlock;
 
 /// xv6 sleep(): release `lk` (if not the ptable lock), mark SLEEPING on
