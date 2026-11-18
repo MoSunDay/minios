@@ -1,11 +1,15 @@
-//! minios host runner: static ELF gate + CORE-UP-GRUB suite runs + verdict.
-//! Shell/Make only launches this binary; all judgement lives in Rust
-//! (plans/linux26 ADR-0013, 40 §2). M0R uses config CORE-UP-GRUB; the M1R
-//! suites use CORE-UP-GRUB-R1, appending the frozen raw-IDE root drive
-//! (40 §1.2); both M1R invocations are identical except the -cdrom image.
+//! minios host runner: static ELF gate + CORE-UP-GRUB suite runs + verdict
+//! + the C-free tree gate (check-rust-only) and the interactive full-boot
+//! demo (demo-full). Shell/Make only launches this binary; all judgement
+//! lives in Rust (plans/linux26 ADR-0013, 40 §2). M0R uses config
+//! CORE-UP-GRUB; the M1R suites use CORE-UP-GRUB-R1, appending the frozen
+//! raw-IDE root drive (40 §1.2); both M1R invocations are identical
+//! except the -cdrom image.
 
 mod coverage;
+mod demo;
 mod elfcheck;
+mod rustonly;
 mod userelf;
 mod verdict;
 
@@ -29,16 +33,20 @@ fn main() {
         Some("run-m1r-user") => cmd_run_suite(Suite::M1rUser, "run-m1r-user", &args[1..]),
         Some("run-m1r-fault") => cmd_run_suite(Suite::M1rFault, "run-m1r-fault", &args[1..]),
         Some("coverage") => cmd_coverage(&args[1..]),
+        Some("check-rust-only") => rustonly::cmd(&args[1..]),
+        Some("demo-full") => demo::cmd_demo_full(&args[1..]),
         _ => {
             eprintln!(
                 "usage: minios-runner <command>\n\
                  \x20 check-elf <kernel-elf>\n\
+                 \x20 check-rust-only [--root DIR]\n\
                  \x20 run-smoke --iso <iso> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-suite --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-user --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-fault --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 coverage --manifest <coverage.toml> --serial <serial.log> --suite m1r-user\n\
-                 \x20           --run <run-id> --config <CONFIG-ID> --milestone <MxR>"
+                 \x20           --run <run-id> --config <CONFIG-ID> --milestone <MxR>\n\
+                 \x20 demo-full --iso <iso> --root <root.raw> --work-dir DIR"
             );
             2
         }

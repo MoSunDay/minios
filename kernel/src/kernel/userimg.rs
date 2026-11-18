@@ -13,6 +13,7 @@ pub struct UserImage {
 const SUITE_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/userimg/m1r-suite"));
 const EXEC_CHILD_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/userimg/m1r-exec-child"));
 const USERTESTS_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/userimg/usertests"));
+const INIT_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/userimg/init"));
 
 /// The embedded image table (S3 image source; S4 adds the fs lookup).
 pub const IMAGES: &[UserImage] = &[
@@ -27,6 +28,12 @@ pub const IMAGES: &[UserImage] = &[
     UserImage {
         path: "/usertests",
         elf: USERTESTS_ELF,
+    },
+    // BootMode::Full (S4e-4): the pid-1 seed; /sh is then execve'd from
+    // the real xv6fs root image like every later program.
+    UserImage {
+        path: "/init",
+        elf: INIT_ELF,
     },
 ];
 

@@ -370,3 +370,34 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   与仓库无关，snapshot 步骤早于任何构建）；本阶段推送即重触发，main tip 覆盖
   S4e-2+S4e-3 两阶段内容。check-rust-only 与遗留 C 删除一并入 S4e-4（先删后启，
   保持每提交可绿）。
+
+2026-11-19 S4e-4 闭环（遗留 C 删除 + rust-only 门禁 + BootMode::Full 演示 + M1R CI 接线）：
+
+- 删除：user 全部 C（19 .c + 11 头 + usys.S + legacy Makefile）、tools/mkfs.c 及 4 头、
+  kernel 死代码（io.rs、legacy/i686_main.rs、arch/x86 i686 树、console/{serial,vga}.rs）
+  与 user/_*、*.o、fs.img、tools/mkfs 产物；Makefile 去 legacy-user。保留
+  user/x86_64-minios-user.ld（Rust 链接脚本）与 kernel/src/arch/x86_64/*.S（6 个
+  冻结 asm 桩，白名单）。make all 删除后即绿（无任何引用残留）。
+- check-rust-only（runner/src/rustonly.rs 399 行 + 6 单测）：扫 abi/kernel/user/
+  tools/host-tests/tests 六根；违规=C 族扩展名（c/h/cc/cpp/cxx/c++/hpp/hh/hxx/i/ii）、
+  白名单外 .S/.s、Makefile/scripts//.cargo/Cargo.toml 中 cc/gcc/clang/g++ 等编译器
+  调用（basename 精确匹配 + -gcc/-cc 后缀）；缺根亦 fail。实树 PASS：
+  roots=6 files=117 asm-allowlist=6 c-sources=0 compiler-invocations=0。
+- BootMode::Full（S4e-4 演示）：main.rs Full 臂 init_m1r_fs + userimg 新增 /init 内嵌
+  （build.rs 暂存第 4 个 ELF）+ proc::userinit → init(1) mknod /console → fork/exec
+  /sh（真实 xv6fs 路径）。runner demo-full（demo.rs 400 行 + 5 单测）：QEMU 唯一
+  偏差 -serial stdio（冻结 argv 断言钉死），读者线程镜像 serial.log，6 步会话
+  boot→prompt→echo→ls（usertests 先于 console：mkfs 嵌入序，/console 为 init 启动后
+  mknod 的最后 dirent）→CTRL-D→init 重启 sh；PASS 印 MINIOS_X86_64_DEMO_FULL_PASS_V1
+  markers=6。serial `efa925a4…eb9a`。
+- 内核修复 #7（本阶段第 7 处）：consoleintr 缺 EOI —— COM1 首次输入后 PIC in-service
+  位悬挂，饿死包括 timer 在内的全部后续 IRQ（会话在第一条命令后冻结）；对齐
+  ideintr/time::tick 的"各自应答"约定，eoi 置于 drain 前。
+- CI（40 §4.1 M1R 行全部接线）：check-rust-only、test-qemu（m1r-suite）、
+  test-qemu-user（35 例+coverage）、test-expected-fault、demo-full 五步插入
+  ci.yml；job 更名 M1R core；evidence 上传扩至四 run 目录 + results/m1r-user。
+- 证据：全矩阵绿 —— smoke 6/6 `028048dd…92f1`、m1r-suite 20/20 `6137aefd…e585`、
+  m1r-user 35/35+coverage PASS `0c39a3e5…08d3`/`a5a140d6…c947`（三者字节不变，证明
+  EOI 修复与 Full 臂不扰动既有套件）；m1r-fault 5/5 exit 35，serial 重钉
+  `1ba8b13a…4fec`（内核布局位移致符号化回溯偏移变化，语义判定不变；旧钉
+  `1fbae812…f967` 作废）；test-host 62 runner 例、fmt、make all 绿。

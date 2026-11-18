@@ -26,7 +26,7 @@ env:
 
 jobs:
   m0r-core:
-    name: M0R core (build + static gate + host tests + QEMU smoke)
+    name: M1R core (build + static gates + host tests + QEMU suites + rust-only)
     runs-on: ubuntu-22.04
     # Suite deadline is 120 s inside the Rust runner; the job timeout only
     # guards the infrastructure around it (40-testing-ci.md §3.5).
@@ -92,6 +92,23 @@ jobs:
       - name: "Real QEMU smoke (CORE-UP-GRUB: exit 33 + protocol verdict)"
         run: make test-qemu-smoke
 
+      # M1R (40 §4.1): rust-only gate + kernel/user/fault QEMU suites +
+      # the BootMode::Full interactive demo (S4e-4).
+      - name: "Rust-only tree gate (no C sources / C compiler invocations)"
+        run: make check-rust-only
+
+      - name: "Real QEMU m1r-suite (CORE-UP-GRUB-R1: exit 33 + protocol verdict)"
+        run: make test-qemu
+
+      - name: "Real QEMU m1r-user (35 xv6 cases + coverage matrix gate)"
+        run: make test-qemu-user
+
+      - name: "Real QEMU m1r-fault (expected-fault suite, exit 35)"
+        run: make test-expected-fault
+
+      - name: "BootMode::Full demo (init -> sh interactive serial session)"
+        run: make demo-full
+
       - name: Upload M0R evidence (kernel ELF, ISO, serial log, verdict)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -101,5 +118,10 @@ jobs:
             target/x86_64-unknown-none/release/kernel
             target/m0r-iso
             target/m0r-run
+            target/m1r-suite-run
+            target/m1r-user-run
+            target/m1r-fault-run
+            target/full-run
+            results/m1r-user
           if-no-files-found: error
           retention-days: 30

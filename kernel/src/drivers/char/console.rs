@@ -69,6 +69,11 @@ pub fn consoleinit() {
 /// UART receive: drain every ready byte into the ring (uart.c uartintr ->
 /// consoleintr, inlined to the one interrupt source we keep).
 pub fn consoleintr() {
+    // Acknowledge the line first, like ideintr: a missing EOI leaves the
+    // PIC in-service bit set and starves every IRQ at lower priority —
+    // including the timer — so the session would freeze after the first
+    // input burst.
+    crate::drivers::pic::eoi(crate::kernel::traps::IRQ_COM1 as u8);
     // SAFETY: INPUT_LOCK guards the ring indices.
     unsafe {
         while in8(COM1 + 5) & 0x01 != 0 {

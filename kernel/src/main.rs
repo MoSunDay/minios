@@ -98,8 +98,17 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
         }
         BootMode::Full => {
             ksymtab::set_active_suite("minios");
-            // The interactive boot (init -> sh) needs the S4 file system.
-            m1r_fatal("full boot arrives with the S4 fs chain");
+            // The interactive boot (S4e-4): init(1) from the S4 fs chain,
+            // console RX live, init -> sh on the serial line.
+            init_m1r_fs();
+            let image = match kernel::userimg::lookup(b"/init") {
+                Some(img) => img,
+                None => m1r_fatal("init image missing"),
+            };
+            if !proc::proc::userinit(image) {
+                m1r_fatal("userinit failed");
+            }
+            proc::sched::sched_entry();
         }
         BootMode::M0rSmoke => unreachable!(),
     }

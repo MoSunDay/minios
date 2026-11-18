@@ -332,8 +332,7 @@ pub fn growproc(n: i64) -> usize {
     new
 }
 
-/// First user process: exec `image` as pid 1 named "init".
-#[allow(dead_code)] // S4: the interactive boot execs the fs init image
+/// First user process: exec `image` as pid 1 named "init" (BootMode::Full).
 pub fn userinit(image: &[u8]) -> bool {
     userinit_named(image, b"init", &[b"init"])
 }

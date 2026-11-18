@@ -22,14 +22,17 @@ GRUB_CFG := scripts/m0r-grub-early.cfg
 M1R_SUITE_CFG := scripts/m1r-suite-grub.cfg
 M1R_USER_CFG := scripts/m1r-user-grub.cfg
 M1R_FAULT_CFG := scripts/m1r-fault-grub.cfg
+FULL_CFG := scripts/minios-full-grub.cfg
 ISO_DIR  := $(TARGET_DIR)/m0r-iso
 M1R_SUITE_DIR := $(TARGET_DIR)/m1r-suite-iso
 M1R_USER_DIR := $(TARGET_DIR)/m1r-user-iso
 M1R_FAULT_DIR := $(TARGET_DIR)/m1r-fault-iso
+FULL_DIR := $(TARGET_DIR)/full-iso
 ISO      := $(ISO_DIR)/minios-m0r.iso
 M1R_SUITE_ISO := $(M1R_SUITE_DIR)/minios-m1r-suite.iso
 M1R_USER_ISO := $(M1R_USER_DIR)/minios-m1r-user.iso
 M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
+FULL_ISO := $(FULL_DIR)/minios-full.iso
 # M1R S3 user chain: the user crate builds through its own target dir and
 # RUSTFLAGS (rust-lld + own link script + static non-PIE ET_EXEC); these
 # are Makefile-scoped env, deliberately never .cargo/config.toml, which is
@@ -57,12 +60,13 @@ RUN_DIR  := $(TARGET_DIR)/m0r-run
 M1R_SUITE_RUN := $(TARGET_DIR)/m1r-suite-run
 M1R_USER_RUN := $(TARGET_DIR)/m1r-user-run
 M1R_FAULT_RUN := $(TARGET_DIR)/m1r-fault-run
+FULL_RUN := $(TARGET_DIR)/full-run
 ROOT_TEMPLATE := $(TARGET_DIR)/root-template.raw
 GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial echo boot search memdisk
 
-.PHONY: all build user-build check-user-elf check-layout m0r-iso m1r-iso m1r-user-iso m1r-fault-iso \
-        test-qemu-smoke run-smoke test-qemu test-qemu-user test-expected-fault test test-host fmt fmt-check \
-        clean legacy-user
+.PHONY: all build user-build check-user-elf check-layout check-rust-only m0r-iso m1r-iso m1r-user-iso \
+        m1r-fault-iso full-iso test-qemu-smoke run-smoke test-qemu test-qemu-user test-expected-fault \
+        demo-full test test-host fmt fmt-check clean
 
 all: build check-user-elf check-layout
 
@@ -94,6 +98,11 @@ build: user-build
 # Static Multiboot1/ELF64 layout gate (Rust verdict, ADR-0013).
 check-layout: build
 	$(RUNNER) check-elf $(KERNEL)
+
+# Static C-free tree gate (Rust verdict): the legacy C tree is retired;
+# this keeps it retired (six roots, asm allowlist, compiler tokens).
+check-rust-only:
+	$(RUNNER) check-rust-only
 
 # Reproducible GRUB Multiboot ISO: kernel + embedded early config.
 m0r-iso: build
@@ -129,9 +138,14 @@ m1r-fault-iso: build
 m1r-user-iso: build
 	$(call make-m1r-iso,$(M1R_USER_DIR),$(M1R_USER_CFG),$(M1R_USER_ISO))
 
+# BootMode::Full ISO variant (cmdline `full`: /init -> sh on serial).
+full-iso: build
+	$(call make-m1r-iso,$(FULL_DIR),$(FULL_CFG),$(FULL_ISO))
+
 # Root-disk template: the xv6 root image built by the S4 Rust mkfs
-# (minios-tools, plans/linux26/04 §5; byte-parity with tools/mkfs.c
-# proven at port time). Never attached to QEMU directly: every round
+# (minios-tools, plans/linux26/04 §5; byte-parity with the retired xv6
+# C mkfs proven at port time, S4e-4). Never attached to QEMU directly:
+# every round
 # copies it fresh into its own run dir (40 §2.2).
 MKFS := cargo run --offline -q -p minios-tools --target $(HOST_TARGET) --bin minios-mkfs --
 $(ROOT_TEMPLATE): $(USER_ELFS) tools/src/lib.rs tools/src/bin/mkfs.rs tools/Cargo.toml
@@ -176,6 +190,16 @@ test-expected-fault: m1r-fault-iso $(ROOT_TEMPLATE)
 	$(RUNNER) run-m1r-fault --iso $(M1R_FAULT_ISO) --root $(M1R_FAULT_RUN)/root.raw --work-dir $(M1R_FAULT_RUN)
 	@sha256sum $(M1R_FAULT_RUN)/serial.log $(M1R_FAULT_RUN)/root.raw
 
+# Interactive full-boot demo (BootMode::Full): the runner attaches the
+# root drive, drives sh over `-serial stdio` (echo/ls/CTRL-D) and judges
+# the six frozen markers itself (MINIOS_X86_64_DEMO_FULL_*_V1).
+demo-full: full-iso $(ROOT_TEMPLATE)
+	@rm -rf $(FULL_RUN)
+	@mkdir -p $(FULL_RUN)
+	@cp $(ROOT_TEMPLATE) $(FULL_RUN)/root.raw
+	$(RUNNER) demo-full --iso $(FULL_ISO) --root $(FULL_RUN)/root.raw --work-dir $(FULL_RUN)
+	@sha256sum $(FULL_RUN)/serial.log
+
 # Host-side Rust tests: verdict fault self-tests + portable kernel modules.
 test: test-host
 
@@ -194,8 +218,5 @@ fmt-check:
 
 clean:
 	cargo clean
-	@rm -rf $(ISO_DIR) $(M1R_SUITE_DIR) $(M1R_FAULT_DIR) $(USER_TARGET)
+	@rm -rf $(ISO_DIR) $(M1R_SUITE_DIR) $(M1R_FAULT_DIR) $(FULL_DIR) $(USER_TARGET)
 
-# Legacy i686 userspace (not part of the x86_64 Core path; see kernel/src/legacy).
-legacy-user:
-	$(MAKE) -C user
