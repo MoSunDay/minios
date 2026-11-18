@@ -1,0 +1,12 @@
+# minios shared ABI crate (M1R): Linux 2.6.39.4 x86-64 syscall numbers,
+# errno values, and auxv keys. Single source of truth for kernel and the
+# Rust user runtime (plans/linux26/02 §5, 04 §1).
+[package]
+name = "minios-abi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "abi"
+path = "src/lib.rs"

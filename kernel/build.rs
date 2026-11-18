@@ -83,6 +83,8 @@ fn main() {
     if fs::read_to_string(&dest).as_deref().ok() != Some(out.as_str()) {
         fs::write(&dest, &out).expect("write ksymtab.rs");
     }
+
+    stage_user_images(&out_dir);
 }
 
 /// Emit a `[u8; KSYM_NAME]` literal as a byte-string with padding NULs.
@@ -171,4 +173,43 @@ fn rd32_at(sec: &[u8], o: usize) -> u32 {
 }
 fn rd64_at(sec: &[u8], o: usize) -> u64 {
     u64::from_le_bytes(sec[o..o + 8].try_into().unwrap())
+}
+
+/// S3 user images: stage the linked user ELFs into OUT_DIR/userimg so the
+/// kernel can include_bytes! them. Source: MINIOS_USER_IMG_DIR (Makefile,
+/// points at the user crate's target release dir); missing files become
+/// empty placeholders so a bare `cargo check` of the kernel still works.
+fn stage_user_images(out_dir: &std::path::Path) {
+    use std::path::Path;
+
+    let dir = out_dir.join("userimg");
+    fs::create_dir_all(&dir).expect("mkdir OUT_DIR/userimg");
+    let src_dir = env::var("MINIOS_USER_IMG_DIR").unwrap_or_default();
+    let src_root = Path::new(&src_dir);
+    println!("cargo:rerun-if-env-changed=MINIOS_USER_IMG_DIR");
+    if src_dir.is_empty() {
+        println!("cargo:warning=MINIOS_USER_IMG_DIR unset; embedding empty user images");
+    } else {
+        println!("cargo:rerun-if-changed={}", src_root.display());
+    }
+    for name in ["m1r-suite", "m1r-exec-child"] {
+        let src = src_root.join(name);
+        let dst = dir.join(name);
+        let bytes = match fs::read(&src) {
+            Ok(b) => b,
+            Err(_) => {
+                if !src_dir.is_empty() {
+                    println!(
+                        "cargo:warning=user image {} not found at {}",
+                        name,
+                        src.display()
+                    );
+                }
+                Vec::new()
+            }
+        };
+        // Only rewrite on change: content-identical reruns keep the
+        // convergence loop calm.
+        let _ = fs::write(&dst, &bytes);
+    }
 }

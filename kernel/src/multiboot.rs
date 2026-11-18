@@ -50,6 +50,7 @@ pub struct MbiInfo {
 
 // ---- M1R: cmdline + memory-map parsing ----------------------------------
 
+const MBI_FLAG_MEM: u32 = 1 << 0;
 const MBI_FLAG_CMDLINE: u32 = 1 << 2;
 const MBI_FLAG_MMAP: u32 = 1 << 8;
 
@@ -95,18 +96,24 @@ pub fn for_each_available(mbi_phys: usize, mut f: impl FnMut(u64, u64)) {
     // SAFETY: the loader-provided MBI and mmap array are identity mapped.
     unsafe {
         let mbi = &*(mbi_phys as *const MbiInfo);
-        if mbi.flags & MBI_FLAG_MMAP == 0 {
+        if mbi.flags & MBI_FLAG_MMAP != 0 {
+            let mut off = 0usize;
+            while off < mbi.mmap_length as usize {
+                let entry = &*((mbi.mmap_addr as usize + off) as *const MmapEntry);
+                off += entry.size as usize + 4;
+                if entry.mtype == MMAP_AVAILABLE {
+                    let base = (entry.addr_low as u64) | ((entry.addr_high as u64) << 32);
+                    let len = (entry.len_low as u64) | ((entry.len_high as u64) << 32);
+                    f(base, len);
+                }
+            }
             return;
         }
-        let mut off = 0usize;
-        while off < mbi.mmap_length as usize {
-            let entry = &*((mbi.mmap_addr as usize + off) as *const MmapEntry);
-            off += entry.size as usize + 4;
-            if entry.mtype == MMAP_AVAILABLE {
-                let base = (entry.addr_low as u64) | ((entry.addr_high as u64) << 32);
-                let len = (entry.len_low as u64) | ((entry.len_high as u64) << 32);
-                f(base, len);
-            }
+        // Some GRUB builds pass only the legacy sizes (mmap flag clear);
+        // fall back to the flat upper-memory range [1 MiB, 1 MiB+upper).
+        // frame::init clips it at the kernel end and PHYS_TOP anyway.
+        if mbi.flags & MBI_FLAG_MEM != 0 && mbi.mem_upper != 0 {
+            f(0x10_0000, mbi.mem_upper as u64 * 1024);
         }
     }
 }

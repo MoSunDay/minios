@@ -13,3 +13,4 @@ pub mod syscall;
 pub mod tf_layout;
 pub mod time;
 pub mod traps;
+pub mod userimg;

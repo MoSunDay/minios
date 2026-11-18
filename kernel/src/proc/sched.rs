@@ -21,6 +21,34 @@ unsafe extern "C" {
     fn _swtch(old_sp: *mut usize, new_sp: usize);
 }
 
+/// High-half stack for the scheduler thread: the boot stack's low identity
+/// window is absent from user address spaces, so the scheduler leaves it
+/// before the first switchuvm (see _sched_entry in swtch.S).
+#[repr(C, align(16))]
+pub struct SchedStack([u8; 16 * 1024]);
+
+const _: () = assert!(core::mem::size_of::<SchedStack>() == 16 * 1024);
+
+#[unsafe(no_mangle)]
+#[allow(dead_code)]
+pub static mut M1R_SCHED_STACK: SchedStack = SchedStack([0; 16 * 1024]);
+
+unsafe extern "C" {
+    /// Enter the scheduler loop on M1R_SCHED_STACK; never returns.
+    fn _sched_entry() -> !;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn scheduler_high_entry() -> ! {
+    scheduler()
+}
+
+/// Enter the scheduler on its own high-half stack (never returns).
+pub fn sched_entry() -> ! {
+    // SAFETY: boot context, single CPU, interrupts off.
+    unsafe { _sched_entry() }
+}
+
 /// Per-CPU state: the scheduler (idle) context and the running process.
 pub struct Cpu {
     pub scheduler: Context,
@@ -59,7 +87,9 @@ pub unsafe fn sched_raw() {
     }
     // addr_of_mut! on a static-mut field is the lint-blessed pointer form.
     let sched_ctx = addr_of_mut!(CPU0.scheduler);
-    unsafe { swtch(sched_ctx, &proc.context) };
+    // The process saves into its own context and resumes the scheduler's
+    // (mirror of the scheduler-loop switch; old = current thread).
+    unsafe { swtch(addr_of_mut!(proc.context), sched_ctx) };
 }
 
 /// Timer preemption from a user trap: give up the CPU for one round.

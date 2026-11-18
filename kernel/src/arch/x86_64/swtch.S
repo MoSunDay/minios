@@ -27,3 +27,19 @@ _swtch:
     popq %rbx
     popq %rbp
     ret                     /* resume rip from the image's 7th slot */
+
+/* --- scheduler entry --------------------------------------------------------
+ * The boot stack lives in the low boot.bss identity window, which user
+ * address spaces do not map; the scheduler must run on a high-half stack
+ * to survive switchuvm into a user CR3 (call pushes land there after the
+ * address-space switch). Never returns.
+ */
+.text
+.globl _sched_entry
+_sched_entry:
+    movabsq $M1R_SCHED_STACK+16384, %rsp
+    xorq %rbp, %rbp
+    callq scheduler_high_entry
+1:  cli
+    hlt
+    jmp 1b

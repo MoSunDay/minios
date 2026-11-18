@@ -1,5 +1,6 @@
 # Build artifacts; never commit binaries.
 /target
+/target-user
 *.o
 *.d
 *.a

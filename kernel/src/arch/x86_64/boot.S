@@ -24,10 +24,11 @@ _low_start:
     leal _low_pdpt, %eax
     orl $3, %eax
     movl %eax, 0(%edi)
-    /* Direct map of all physical RAM at 0xffff_ff00_0000_0000 (PML4[509]). */
+    /* Direct map of all physical RAM at 0xffff_ff00_0000_0000.
+     * VA bits 47..39 = 0b1_1111_1110 = 510 (0xff00 high byte, bit 39 = 0). */
     leal _dm_pdpt, %eax
     orl $3, %eax
-    movl %eax, 509*8(%edi)
+    movl %eax, 510*8(%edi)
     leal _high_pdpt, %eax
     orl $3, %eax
     movl %eax, 511*8(%edi)
@@ -92,8 +93,8 @@ _low_start:
 
     leal _dm_page_dir, %edi
     xorl %ecx, %ecx
-    movl $0x80000083, %eax   /* P|RW|PS|NX */
-    movl $0x00000000, %edx
+    movl $0x83, %eax         /* P|RW|PS (low dword) */
+    movl $0x80000000, %edx   /* NX = bit 63 -> high dword */
 7:
     movl %eax, (%edi,%ecx,8)
     movl %edx, 4(%edi,%ecx,8)

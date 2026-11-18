@@ -176,3 +176,30 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   disambiguator 与深层帧偏移；5 条注入的 rip/backtrace 头偏移逐字节不变，D-3
   前缀契约不受影响）；M0R `71f9cf19…5adf` 字节不变；make test 58 例、fmt-check、
   build、check-layout 全绿。
+
+2026-11-18 S3 闭环（用户链点亮：abi/user 两个新 crate + 内核 proc/VM/FPU 运行时，
+本地全绿后提交）：
+
+- 新增 abi/：Linux 2.6.39.4 x86-64 syscall 号与共享 ABI 常量（kernel/user/runner
+  三方单一来源）。新增 user/：no_std 静态非 PIE ET_EXEC（rust-lld + 专用链接脚本，
+  .text@0x400000 起），自带 memset/memcpy/memmove/memcmp，m1r-suite 8 用例
+  （write/getpid_fork/fork_wait/execve/execve_enoent/brk/sse_crosstalk/syscall_regs）
+  + m1r-exec-child（exec 替身镜像，打印 replaced image 后 exit）。
+- 内核：syscall.rs 分发表（write/brk/fork/getpid/execve/exit/wait4/kill，其余
+  ENOSYS）；proc.rs fork/wait4（wstatus=(xstate&0xff)<<8）/exit reparent/初始用户
+  进程 userinit_named；exec.rs 通用 ELF 装载器（逐段拷贝逐字节校验）；sched.rs
+  CPL0→CPL3 首切与 FPU 惰性 save/restore（XRSTOR 状态机，SSE 串扰用例守护）；
+  cpu.rs TSS 改 packed（RSP0@offset 4）；userimg.rs + build.rs 构建期把 user ELF
+  暂存进内核镜像（MINIOS_USER_IMG_DIR→OUT_DIR/userimg，rerun-if-changed）。
+- 套件合并协议：用户态退出码 (total<<4)|failed，内核 proc::exit 在 initproc 收割
+  后由 suite::finish_driver 合并打点——单一 PASS 标记 total=13（5 内核 + 8 用户）。
+- 排障沉淀（case_brk 根因）：用户 8 字节 store 跨入未映射页（base+0x1fff 起的
+  qword 跨 0x406000 页界，#PF CR2 指向缺失页首而非指令基址）——内核 brk/grow/
+  mappages/sysretq 全程无辜（gdb 断点+页表行走证实）；用例改触 base+0x1ff8（页内
+  最后一个完整 qword）。教训入 40 §5 备注。
+- runner：verdict/m1r 清单扩至 13 用例（fixture 含用户 CASE 行与 total=13）；
+  新增 userelf.rs（ISO 内嵌 user ELF 的构建期一致性校验）；panic 双前缀 `:0x0x`
+  修正。
+- 证据（verdict: PASS，exit 33）：m1r-suite `4d08bbf5…cacbe`（total=13 passed=13，
+  root `30e14955…cb58`）；M0R `028048dd…92f1`；m1r-fault `5aa34926…7af2`
+  （exit 35）；make test-host 58 例、fmt-check、make all 全绿。

@@ -62,8 +62,8 @@ pub fn setup_user_pml4() -> PtPtr {
     unsafe {
         (*entries(pml4)).fill(0);
         let boot = boot_pml4();
-        // Share kernel half: direct map (509), kernel image (510), high (511).
-        for i in 509..512 {
+        // Share the kernel half: direct map (510) and kernel image (511).
+        for i in 510..512 {
             (*entries(pml4))[i] = (*entries(boot))[i];
         }
     }

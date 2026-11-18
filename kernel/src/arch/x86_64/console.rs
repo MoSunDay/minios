@@ -61,7 +61,7 @@ pub fn write_str(text: &str) {
 pub fn write_hex(value: usize) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     write_str("0x");
-    for shift in (0..usize::BITS).rev().step_by(4) {
+    for shift in (0..usize::BITS).step_by(4).rev() {
         let digit = (value >> shift) & 0xf;
         write_byte(HEX[digit]);
     }

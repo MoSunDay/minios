@@ -36,7 +36,11 @@ pub const SEL_TSS: u16 = 0x38;
 pub const KSTACKSIZE: usize = 4096 * 4;
 pub const NPROC: usize = 64;
 
-#[repr(C, align(16))]
+/// TSS64 layout is byte-exact: RSP0 sits at offset 4 (unaligned u64), so
+/// the struct must be packed — a plain repr(C) would pad it to offset 8
+/// and every user->kernel interrupt delivery would load a non-canonical
+/// RSP0 (#GP e=0 at the CPL3->CPL0 switch).
+#[repr(C, packed)]
 struct Tss {
     reserved0: u32,
     privilege_stacks: [u64; 3],
@@ -140,7 +144,7 @@ pub fn init(kernel_stack_top: usize) {
         wrmsr(MSR_EFER, efer | 1);
         // Kernel CS=0x08; sysretq user base=0x20 (CS 0x30, SS 0x28).
         wrmsr(MSR_STAR, (0x20u64 << 48) | (0x08u64 << 32));
-        wrmsr(MSR_LSTAR, syscall_entry as *const () as usize as u64);
+        wrmsr(MSR_LSTAR, syscall_entry() as u64);
         // Clear trace/alignment flags; keep IF so the syscall body observes
         // the same interrupt discipline as the IDT trap-gate path.
         wrmsr(MSR_FMASK, 0x3f7fd5);
@@ -149,6 +153,7 @@ pub fn init(kernel_stack_top: usize) {
 
 /// Points TSS.RSP0 (and the syscall-entry kernel stack) at `top`.
 /// Called on every process switch; interrupts are off.
+
 pub fn set_kernel_stack(top: usize) {
     // SAFETY: single CPU, caller holds the switch context.
     unsafe {

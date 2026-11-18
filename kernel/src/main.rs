@@ -85,17 +85,14 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
         }
         BootMode::Full => {
             ksymtab::set_active_suite("minios");
-            // The embedded init ELF arrives with the S3 userspace chain.
-            if !proc::proc::userinit(b"") {
-                m1r_fatal("init image not embedded yet");
-            }
-            proc::sched::scheduler();
+            // The interactive boot (init -> sh) needs the S4 file system.
+            m1r_fatal("full boot arrives with the S4 fs chain");
         }
         BootMode::M0rSmoke => unreachable!(),
     }
 }
 
-fn m1r_fatal(why: &str) -> ! {
+pub(crate) fn m1r_fatal(why: &str) -> ! {
     console::write_str("MINIOS_X86_64_TEST_FATAL_V1 suite=");
     console::write_str(ksymtab::active_suite());
     console::write_str(" run=core-up reason=");
@@ -108,10 +105,18 @@ fn m1r_fatal(why: &str) -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     console::write_str("MINIOS_X86_64_TEST_FATAL_V1 suite=");
     console::write_str(ksymtab::active_suite());
-    console::write_str(" run=core-up reason=panic\n");
+    console::write_str(" run=core-up reason=panic at ");
+    if let Some(loc) = info.location() {
+        console::write_str(loc.file());
+        console::write_str(":");
+        console::write_hex(loc.line() as usize);
+    } else {
+        console::write_str("unknown");
+    }
+    console::write_str("\n");
     arch::x86_64::io::out32(0xf4, 0x12);
     loop {
         arch::x86_64::io::hlt();

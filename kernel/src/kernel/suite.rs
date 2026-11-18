@@ -1,11 +1,10 @@
-//! M1R kernel-mode suite v1 (S2, 20-roadmap M1R): runs entirely in CPL0
-//! boot context — no user ELF — and exercises the real trap runtime:
-//! the CPL0 interrupt path (first timer tick through frame normalization
-//! and iretq), UserPtr fixup on unmapped user memory, and the runtime
-//! symbol table, and the USER_TOP preflight that rejects kernel-half
-//! pointers before any byte moves. Output reuses the frozen M0R CASE
-//! protocol; the final
-//! PASS marker exits 0x10 -> QEMU 33.
+//! M1R suite (S2 kernel-mode cases + S3 user chain): the CPL0 phase
+//! exercises the trap runtime (timer round trip, UserPtr fixup, USER_TOP
+//! preflight, runtime symbol table), then seeds pid 1 from the embedded
+//! m1r-suite image. The user driver prints its own CASE lines and exits
+//! with (total<<4)|failed; when pid 1 exits, finish() merges both phases
+//! into the frozen verdict marker and exits 0x10 -> QEMU 33 (0x11 on any
+//! failure).
 
 use super::ksyms;
 use super::ksymtab;
@@ -23,24 +22,30 @@ unsafe extern "C" {
     fn _copyin_bytes(dst: *mut u8, src: *const u8, len: usize) -> i64;
 }
 
-/// Suite entry (never returns; exits through isa-debug-exit).
-pub fn run() -> ! {
-    let mut total = 0u8;
-    let mut passed = 0u8;
-    let checks: [(&str, fn() -> bool); 5] = [
-        ("m1r.irq.pit", case_irq_pit),
-        ("m1r.uaccess.copyin_efault", case_copyin_efault),
-        ("m1r.uaccess.copyout_efault", case_copyout_efault),
-        ("m1r.uaccess.kernelptr_efault", case_kernelptr_efault),
-        ("m1r.ksym.self", case_ksym_self),
-    ];
-    for (case_id, check) in checks {
-        total += 1;
-        if run_case(case_id, check()) {
-            passed += 1;
-        }
-    }
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+/// Kernel-phase totals for the merged verdict.
+static KERNEL_TOTAL: AtomicU8 = AtomicU8::new(0);
+static KERNEL_PASSED: AtomicU8 = AtomicU8::new(0);
+/// Set once the user driver phase is armed (pid 1 seeded).
+static USER_PHASE: AtomicBool = AtomicBool::new(false);
+
+/// True while pid 1 (the suite driver) runs the user phase.
+pub fn user_phase_armed() -> bool {
+    USER_PHASE.load(Ordering::SeqCst)
+}
+
+/// Merge verdicts and exit QEMU. Called from proc::exit when the armed
+/// suite driver exits; `status` is its encoded (total<<4)|failed exit.
+pub fn finish_driver(status: i32) -> ! {
+    let user_total = ((status >> 4) & 0xf) as u8;
+    let user_failed = (status & 0xf) as u8;
+    let total = KERNEL_TOTAL
+        .load(Ordering::SeqCst)
+        .saturating_add(user_total);
+    let passed = KERNEL_PASSED
+        .load(Ordering::SeqCst)
+        .saturating_add(user_total.saturating_sub(user_failed));
     let failed = total - passed;
     if failed == 0 {
         console::write_str("MINIOS_X86_64_TEST_PASS_V1 suite=m1r run=core-up total=");
@@ -57,6 +62,39 @@ pub fn run() -> ! {
     loop {
         io::hlt();
     }
+}
+
+/// Suite entry (never returns): kernel cases, then the user chain.
+pub fn run() -> ! {
+    let mut total = 0u8;
+    let mut passed = 0u8;
+    let checks: [(&str, fn() -> bool); 5] = [
+        ("m1r.irq.pit", case_irq_pit),
+        ("m1r.uaccess.copyin_efault", case_copyin_efault),
+        ("m1r.uaccess.copyout_efault", case_copyout_efault),
+        ("m1r.uaccess.kernelptr_efault", case_kernelptr_efault),
+        ("m1r.ksym.self", case_ksym_self),
+    ];
+    for (case_id, check) in checks {
+        total += 1;
+        if run_case(case_id, check()) {
+            passed += 1;
+        }
+    }
+    KERNEL_TOTAL.store(total, Ordering::SeqCst);
+    KERNEL_PASSED.store(passed, Ordering::SeqCst);
+
+    // S3 user chain: pid 1 from the embedded m1r-suite image; the driver
+    // prints its CASE lines through write(2) and exits with its counts.
+    let image = match super::userimg::lookup(b"/m1r-suite") {
+        Some(img) => img,
+        None => crate::m1r_fatal("m1r-suite image missing"),
+    };
+    if !crate::proc::proc::userinit_named(image, b"m1r-suite", &[b"m1r-suite"]) {
+        crate::m1r_fatal("userinit failed");
+    }
+    USER_PHASE.store(true, Ordering::SeqCst);
+    crate::proc::sched::sched_entry();
 }
 
 fn run_case(case_id: &str, passed: bool) -> bool {

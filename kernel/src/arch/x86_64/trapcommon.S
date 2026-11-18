@@ -126,13 +126,16 @@ trapret_common:
     jae .Lreturn_iret
     cmpb $0, m1r_force_iret(%rip)
     jne .Lreturn_iret
-    /* sysretq path */
+    /* sysretq path. rcx/r11 are dead (sysretq reloads them); rax carries
+     * the syscall return value and must survive. Park the user rsp in the
+     * dead ss slot (sysretq loads SS from STAR, not the stack). */
     pop_all_regs
     addq $16, %rsp            /* stack now: [rip][cs][rflags][rsp][ss] */
+    movq 24(%rsp), %rcx       /* user rsp */
+    movq %rcx, 32(%rsp)       /* park in ss slot */
     movq 0(%rsp), %rcx        /* rip */
     movq 16(%rsp), %r11       /* rflags */
-    movq 24(%rsp), %rax       /* user rsp */
-    movq %rax, %rsp
+    movq 32(%rsp), %rsp       /* user rsp */
     swapgs
     sysretq
 .Lreturn_iret:
@@ -146,12 +149,16 @@ trapret_common:
      * would unwind garbage. Slide the three-slot tail up over the
      * synthesized pair; once iretq pops it, rsp lands exactly on the
      * trap-time rsp (frame base + 176). Copy the highest slot first. */
+    /* rax must survive (interrupted kernel value); park it in the dead
+     * err slot at rsp-8 and use it as the slide scratch. */
+    movq %rax, -8(%rsp)       /* park saved rax in err slot */
     movq 16(%rsp), %rax       /* rflags -> ss slot */
     movq %rax, 32(%rsp)
     movq 8(%rsp), %rax        /* cs -> rsp slot */
     movq %rax, 24(%rsp)
     movq 0(%rsp), %rax        /* rip -> rflags slot */
     movq %rax, 16(%rsp)
+    movq -8(%rsp), %rax       /* restore rax */
     addq $16, %rsp
     iretq
 2:

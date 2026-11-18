@@ -2,7 +2,7 @@
 
 [workspace]
 resolver = "2"
-members = ["kernel", "host-tests", "runner"]
+members = ["abi", "kernel", "host-tests", "runner", "user"]
 default-members = ["kernel"]
 
 # Profiles must live at the workspace root: cargo ignores member profiles.

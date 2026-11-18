@@ -1,0 +1,21 @@
+# minios Rust userspace (M1R): no_std runtime + static ET_EXEC binaries.
+# Built only through the Makefile env (rust-lld, own link script, static
+# non-PIE); never through .cargo/config.toml, which is kernel-scoped
+# (plans/linux26/04 §2). x86_64-unknown-linux-gnu is a codegen target
+# only: no libc, no crt, no host syscalls.
+[package]
+name = "minios-user"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+minios-abi = { path = "../abi" }
+
+[[bin]]
+name = "m1r-suite"
+path = "src/bin/m1r-suite.rs"
+
+[[bin]]
+name = "m1r-exec-child"
+path = "src/bin/m1r-exec-child.rs"

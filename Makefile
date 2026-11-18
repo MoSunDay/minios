@@ -27,20 +27,52 @@ M1R_FAULT_DIR := $(TARGET_DIR)/m1r-fault-iso
 ISO      := $(ISO_DIR)/minios-m0r.iso
 M1R_SUITE_ISO := $(M1R_SUITE_DIR)/minios-m1r-suite.iso
 M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
+# M1R S3 user chain: the user crate builds through its own target dir and
+# RUSTFLAGS (rust-lld + own link script + static non-PIE ET_EXEC); these
+# are Makefile-scoped env, deliberately never .cargo/config.toml, which is
+# kernel-scoped (04 §2). MINIOS_USER_IMG_DIR feeds kernel/build.rs.
+USER_TARGET := $(CURDIR)/target-user
+USER_RELEASE := $(USER_TARGET)/x86_64-unknown-linux-gnu/release
+USER_ELFS := $(USER_RELEASE)/m1r-suite $(USER_RELEASE)/m1r-exec-child
+export MINIOS_USER_IMG_DIR := $(USER_RELEASE)
+# rust-lld speaks GNU-ld when invoked as ld.lld (argv[0] flavor); the
+# symlink below is pure invocation plumbing, still the toolchain lld.
+USER_LLD_DIR := $(USER_TARGET)/bin
+USER_RUSTFLAGS := -C linker=ld.lld -C linker-flavor=ld \
+                  -C relocation-model=static \
+                  -C link-arg=-T$(CURDIR)/user/x86_64-minios-user.ld \
+                  -C link-arg=--build-id=none
+
 RUN_DIR  := $(TARGET_DIR)/m0r-run
 M1R_SUITE_RUN := $(TARGET_DIR)/m1r-suite-run
 M1R_FAULT_RUN := $(TARGET_DIR)/m1r-fault-run
 ROOT_TEMPLATE := $(TARGET_DIR)/root-template.raw
 GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial echo boot search memdisk
 
-.PHONY: all build check-layout m0r-iso m1r-iso m1r-fault-iso test-qemu-smoke run-smoke \
-        test-qemu test-expected-fault test test-host fmt fmt-check clean legacy-user
+.PHONY: all build user-build check-user-elf check-layout m0r-iso m1r-iso m1r-fault-iso \
+        test-qemu-smoke run-smoke test-qemu test-expected-fault test test-host fmt fmt-check \
+        clean legacy-user
 
-all: build check-layout
+all: build check-user-elf check-layout
+
+# M1R S3 user binaries: static non-PIE ET_EXEC, rust-lld, own script.
+user-build:
+	@mkdir -p $(USER_LLD_DIR)
+	@ln -sf $(TOOLCHAIN_BIN)/rust-lld $(USER_LLD_DIR)/ld.lld
+	PATH=$(USER_LLD_DIR):$(TOOLCHAIN_BIN):$$PATH RUSTFLAGS='$(USER_RUSTFLAGS)' \
+	  CARGO_TARGET_DIR=$(USER_TARGET) \
+	  cargo build --locked --release -p minios-user --target x86_64-unknown-linux-gnu
+
+# Internal ELF layout gate for the user binaries (04 §2: ET_EXEC, static,
+# no PT_INTERP). Host-side Rust verdict, like check-layout.
+check-user-elf: user-build
+	$(RUNNER) check-user-elf $(USER_ELFS)
 
 # ksymtab convergence (kernel/build.rs): the generated table is size-fixed,
 # so the kernel hash stabilizes after the ELF exists; loop <= 4 passes.
-build:
+# S3: the kernel embeds the user ELFs (MINIOS_USER_IMG_DIR), so the user
+# build runs first and build.rs rerun-if-changed covers image updates.
+build: user-build
 	@prev=""; for i in 1 2 3 4; do \
 	  cargo build --locked --release -p minios-kernel || exit 1; \
 	  cur=$$(sha256sum $(KERNEL) | cut -d' ' -f1); \
@@ -133,7 +165,7 @@ fmt-check:
 
 clean:
 	cargo clean
-	@rm -rf $(ISO_DIR) $(M1R_SUITE_DIR) $(M1R_FAULT_DIR)
+	@rm -rf $(ISO_DIR) $(M1R_SUITE_DIR) $(M1R_FAULT_DIR) $(USER_TARGET)
 
 # Legacy i686 userspace (not part of the x86_64 Core path; see kernel/src/legacy).
 legacy-user:

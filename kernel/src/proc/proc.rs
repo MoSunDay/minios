@@ -136,6 +136,10 @@ pub fn exit(status: i32) -> ! {
         super::sleep::wakeup1(super::ptable_chan());
         (*p).state = ProcState::ZOMBIE;
         (*p).xstate = status;
+        // Suite mode: pid 1 is the user driver; its exit is the verdict.
+        if crate::kernel::suite::user_phase_armed() && p == initproc() {
+            crate::kernel::suite::finish_driver(status);
+        }
         sched::sched_raw();
     }
     unreachable!("zombie rescheduled");
@@ -297,20 +301,26 @@ pub fn growproc(n: i64) -> usize {
     new
 }
 
-/// First user process: exec `image` as pid 1. False when nothing to run.
+/// First user process: exec `image` as pid 1 named "init".
+#[allow(dead_code)] // S4: the interactive boot execs the fs init image
 pub fn userinit(image: &[u8]) -> bool {
+    userinit_named(image, b"init", &[b"init"])
+}
+
+/// First user process with an explicit name/argv (suite driver, S4 init).
+/// False when the image fails to load (caller decides the verdict).
+pub fn userinit_named(image: &[u8], name: &[u8], argv: &[&[u8]]) -> bool {
     // SAFETY: boot context, ptable lock free.
     let p = unsafe { allocproc() };
     if p.is_null() {
         return false;
     }
-    let name = b"init";
     // SAFETY: owned EMBRYO slot.
     unsafe {
         let dst = core::ptr::addr_of_mut!((*p).name) as *mut u8;
-        core::ptr::copy_nonoverlapping(name.as_ptr(), dst, name.len());
+        core::ptr::copy_nonoverlapping(name.as_ptr(), dst, name.len().min(16));
         let tf = kstack_tf(p);
-        match exec::exec_elf(p, &mut *tf, image, &[b"init"]) {
+        match exec::exec_elf(p, &mut *tf, image, argv) {
             Ok(()) => {
                 let _guard = PTABLE_LOCK.lock();
                 (*p).state = ProcState::RUNNABLE;

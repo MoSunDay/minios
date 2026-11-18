@@ -9,5 +9,6 @@ description = "minios x86_64 kernel (M0R)"
 name = "kernel"
 path = "src/main.rs"
 
-# Zero external dependencies by design.
+# Zero external dependencies by design (the in-tree abi crate excepted).
 [dependencies]
+minios-abi = { path = "../abi" }

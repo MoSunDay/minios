@@ -3,13 +3,27 @@
 version = 4
 
 [[package]]
+name = "minios-abi"
+version = "0.1.0"
+
+[[package]]
 name = "minios-host-tests"
 version = "0.1.0"
 
 [[package]]
 name = "minios-kernel"
 version = "0.1.0"
+dependencies = [
+ "minios-abi",
+]
 
 [[package]]
 name = "minios-runner"
 version = "0.1.0"
+
+[[package]]
+name = "minios-user"
+version = "0.1.0"
+dependencies = [
+ "minios-abi",
+]

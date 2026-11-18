@@ -264,6 +264,14 @@ pub unsafe fn exec_elf(
         Some(m) => m,
         None => return Err(ENOMEM),
     };
+    // Map from the first segment's page (never VA 0: the NULL page stays
+    // unmapped) and keep a running cursor so each alloc covers only the
+    // newly spanned range (xv6 exec's growing sz).
+    let mut cursor = if nsegs > 0 {
+        pgtable::pgrounddown(segs[0][0])
+    } else {
+        0
+    };
     let mut max_end = 0usize;
     for seg in &segs[..nsegs] {
         let (vaddr, from, filesz, memsz, flags) = (seg[0], seg[1], seg[2], seg[3], seg[4]);
@@ -276,10 +284,11 @@ pub unsafe fn exec_elf(
             new_mm.free();
             return Err(ENOEXEC);
         }
-        if new_mm.alloc(new_mm.sz, end) == 0 {
+        if new_mm.alloc(cursor, end) == 0 {
             new_mm.free();
             return Err(ENOMEM);
         }
+        cursor = end;
         // SAFETY: range just mapped in new_mm.pml4.
         unsafe { write_user(new_mm.pml4, vaddr, &image[from..from + filesz]) };
         // Data segments non-executable; code segments executable.

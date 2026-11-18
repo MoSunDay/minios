@@ -1,35 +1,21 @@
-//! Syscall dispatch hub. Numbers follow Linux 2.6.39.4 x86-64 (02 §ABI);
-//! arguments arrive in the kernel ABI order rdi rsi rdx r10 r8 r9 (rcx is
-//! clobbered by sysretq). Returns in -4095..-1 are errnos (04 §3).
-//! Handlers without a runtime caller yet (S3 user chain) stay minimal but
-//! honest: execve reports -ENOENT (implemented, no image source until S3),
-//! everything unclaimed reports -ENOSYS.
+//! Syscall dispatch hub. Numbers and errno values come from the shared
+//! abi crate (Linux 2.6.39.4 x86-64, plans/linux26/02 §5); arguments
+//! arrive in the kernel ABI order rdi rsi rdx r10 r8 r9 (rcx is clobbered
+//! by sysretq). Returns in -4095..-1 are errnos (04 §3). Numbers outside
+//! the whitelist answer -ENOSYS; S3 execve resolves against the embedded
+//! image table (the S4 fs replaces the source).
 
 use super::sysarg::SyscallArgs;
 use super::traps::Trapframe;
+use crate::mm::uaccess;
 
-pub const ENOENT: i64 = -2;
-pub const ESRCH: i64 = -3;
-pub const ECHILD: i64 = -10;
-pub const EBADF: i64 = -9;
-pub const ENOSYS: i64 = -38;
+pub use abi::{EBADF, ECHILD, EINVAL, ENOENT, ENOSYS, ESRCH};
 
-/// Linux x86-64 syscall numbers wired in M1R S2.
-pub const SYS_WRITE: u64 = 1;
-pub const SYS_BRK: u64 = 12;
-#[allow(dead_code)] // S3 runtime chain
-pub const SYS_FORK: u64 = 57;
-#[allow(dead_code)] // S3 runtime chain
-pub const SYS_EXECVE: u64 = 59;
-pub const SYS_EXIT: u64 = 60;
-#[allow(dead_code)] // S3 runtime chain
-pub const SYS_WAIT4: u64 = 61;
-#[allow(dead_code)] // S3 runtime chain
-pub const SYS_KILL: u64 = 62;
-#[allow(dead_code)] // S3 runtime chain
-pub const SYS_GETPID: u64 = 39;
-#[allow(dead_code)] // S3 runtime chain
-pub const SYS_EXIT_GROUP: u64 = 231;
+/// Linux x86-64 syscall numbers (abi crate re-export for dispatch match).
+use abi::{
+    SYS_BRK, SYS_EXECVE, SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK, SYS_GETPID, SYS_KILL, SYS_WAIT4,
+    SYS_WRITE,
+};
 
 /// C entry from the syscall stub (tf.rax = number, arg registers follow
 /// the x86-64 kernel ABI: rdi rsi rdx r10 r8 r9).
@@ -40,7 +26,7 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         SYS_BRK => sys_brk(a.arg64(0)),
         SYS_FORK => crate::proc::proc::fork() as i64,
         SYS_GETPID => sys_getpid(),
-        SYS_EXECVE => ENOENT, // implemented; no image source until the S3 user chain
+        SYS_EXECVE => sys_execve(tf, a.arg_usize(0), a.arg_usize(1)),
         SYS_EXIT | SYS_EXIT_GROUP => {
             crate::proc::proc::exit(a.arg_i32(0) & 0xff);
         }
@@ -126,12 +112,73 @@ fn sys_wait4(pid: i32, wstatus: Option<usize>) -> i64 {
         return ECHILD;
     }
     if let Some(dst) = wstatus {
-        let r = crate::mm::uaccess::copyout(dst as *mut u8, &xstate as *const i32 as *const u8, 4);
+        // Linux wait status encoding: bits 8..15 carry the exit code
+        // (WEXITSTATUS); the M1R kernel has no signals yet.
+        let wstatus_val: i32 = (xstate & 0xff) << 8;
+        let r = uaccess::copyout(dst as *mut u8, &wstatus_val as *const i32 as *const u8, 4);
         if r != 0 {
             return r;
         }
     }
     reaped as i64
+}
+
+/// execve(2), S3 image source: resolve the NUL-terminated path against
+/// the embedded table, fetch the NULL-terminated argv pointer array, and
+/// replace the current image. envp is ignored (empty environment). A
+/// failed exec keeps the caller's image (Linux/xv6 contract).
+fn sys_execve(tf: &mut Trapframe, path: usize, argv: usize) -> i64 {
+    const MAX_ARGS: usize = 8;
+    const ARG_MAX: usize = 64;
+
+    let mut name = [0u8; ARG_MAX];
+    match uaccess::copyinstr(&mut name, path as *const u8) {
+        0 => {}
+        e => return e,
+    }
+    let name_len = name.iter().position(|&b| b == 0).unwrap_or(0);
+
+    if argv == 0 {
+        return EINVAL;
+    }
+    let mut args_buf = [[0u8; ARG_MAX]; MAX_ARGS];
+    let mut args: [&[u8]; MAX_ARGS] = [b""; MAX_ARGS];
+    let mut nargs = 0usize;
+    loop {
+        let mut ptr_bytes = [0u8; 8];
+        let r = uaccess::copyin(ptr_bytes.as_mut_ptr(), (argv + nargs * 8) as *const u8, 8);
+        if r != 0 {
+            return r;
+        }
+        let arg_ptr = u64::from_le_bytes(ptr_bytes) as usize;
+        if arg_ptr == 0 {
+            break;
+        }
+        if nargs == MAX_ARGS {
+            return EINVAL; // E2BIG-class overflow folded into EINVAL in M1R
+        }
+        match uaccess::copyinstr(&mut args_buf[nargs], arg_ptr as *const u8) {
+            0 => {}
+            e => return e,
+        }
+        let len = args_buf[nargs].iter().position(|&b| b == 0).unwrap_or(0);
+        // SAFETY: args_buf outlives exec_elf (segments + stack are built
+        // from these bytes before it returns).
+        args[nargs] = unsafe { core::slice::from_raw_parts(args_buf[nargs].as_ptr(), len) };
+        nargs += 1;
+    }
+
+    let image = match super::userimg::lookup(&name[..name_len]) {
+        Some(img) => img,
+        None => return ENOENT,
+    };
+
+    let p = crate::proc::proc::myproc();
+    if p.is_null() {
+        return ENOENT;
+    }
+    // SAFETY: p is the current process; exec_elf swaps CR3 itself.
+    unsafe { crate::proc::exec::exec_elf(p, tf, image, &args[..nargs]).map_or_else(|e| e, |()| 0) }
 }
 
 /// Timer hook (S3 nanosleep bookkeeping); no-op until the suite lands.

@@ -5,6 +5,7 @@
 //! (40 §1.2); both M1R invocations are identical except the -cdrom image.
 
 mod elfcheck;
+mod userelf;
 mod verdict;
 
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
         Some("check-elf") => cmd_check_elf(&args[1..]),
+        Some("check-user-elf") => cmd_check_user_elf(&args[1..]),
         Some("run-smoke") => cmd_run_suite(Suite::M0r, "run-smoke", &args[1..]),
         Some("run-m1r-suite") => cmd_run_suite(Suite::M1rSuite, "run-m1r-suite", &args[1..]),
         Some("run-m1r-fault") => cmd_run_suite(Suite::M1rFault, "run-m1r-fault", &args[1..]),
@@ -36,6 +38,37 @@ fn main() {
         }
     };
     std::process::exit(code);
+}
+
+fn cmd_check_user_elf(args: &[String]) -> i32 {
+    if args.is_empty() {
+        eprintln!("check-user-elf: missing <user-elf>...");
+        return 2;
+    }
+    let mut rc = 0;
+    for path in args {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("check-user-elf: cannot read {path}: {e}");
+                rc = 2;
+                continue;
+            }
+        };
+        match userelf::check_user_elf(&bytes) {
+            Ok(report) => {
+                println!(
+                    "check-user-elf: PASS {} entry={:#x} loads={} max_end={:#x}",
+                    path, report.entry, report.loads, report.max_end
+                );
+            }
+            Err(reason) => {
+                eprintln!("check-user-elf: FAIL {path}: {reason}");
+                rc = 1;
+            }
+        }
+    }
+    rc
 }
 
 fn cmd_check_elf(args: &[String]) -> i32 {
