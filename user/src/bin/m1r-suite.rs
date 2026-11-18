@@ -90,6 +90,10 @@ extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
     if !run_case("m1r.user.dup_close", case_dup_close) {
         failed += 1;
     }
+    total += 1;
+    if !run_case("m1r.user.execve_diskcopy", case_execve_diskcopy) {
+        failed += 1;
+    }
 
     sys::exit(((total << 4) | failed) as i32)
 }
@@ -373,4 +377,75 @@ fn case_dup_close() -> bool {
     // The original descriptor must still work after closing the dup.
     let c = sys::write(io::STDOUT, b"d\n") == Ok(2);
     a && b && c
+}
+
+/// S4d-2 disk exec: copy /m1r-exec-child to /elfcopy through fds (the
+/// write path's first real use), exec the copy — a path that exists only
+/// on disk, never in the embedded table — and expect the child image's
+/// marker behavior; then unlink and prove the name is gone.
+fn case_execve_diskcopy() -> bool {
+    let src = b"/m1r-exec-child\0";
+    let dst = b"/elfcopy\0";
+    let sfd = match sys::open(src, abi::O_RDONLY) {
+        Ok(fd) => fd as i32,
+        Err(_) => return false,
+    };
+    let dfd = match sys::open(dst, abi::O_WRONLY | abi::O_CREAT | abi::O_TRUNC) {
+        Ok(fd) => fd as i32,
+        Err(_) => {
+            let _ = sys::close(sfd);
+            return false;
+        }
+    };
+    let mut total = 0usize;
+    let mut chunk = [0u8; 512];
+    loop {
+        match sys::read(sfd, &mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                if sys::write(dfd, &chunk[..n]) != Ok(n) {
+                    let _ = sys::close(sfd);
+                    let _ = sys::close(dfd);
+                    return false;
+                }
+                total += n;
+            }
+            Err(_) => {
+                let _ = sys::close(sfd);
+                let _ = sys::close(dfd);
+                return false;
+            }
+        }
+    }
+    let _ = sys::close(sfd);
+    let _ = sys::close(dfd);
+    // A real ELF: header + segments past the direct-block boundary.
+    if total <= 4096 {
+        return false;
+    }
+
+    let pid = match sys::fork() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    if pid == 0 {
+        let argv: [*const u8; 2] = [dst.as_ptr(), core::ptr::null()];
+        match sys::execve(dst, argv.as_ptr() as *const usize, core::ptr::null()) {
+            _ => sys::exit(3), // a successful exec never returns
+        }
+    }
+    let mut status: i32 = 0;
+    let reaped = match sys::wait4(pid as i32, &mut status) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    if reaped != pid || (status >> 8) & 0xff != 42 {
+        return false;
+    }
+
+    // Cleanup with verification: unlink, then the name must be gone.
+    if sys::unlink(dst).is_err() {
+        return false;
+    }
+    matches!(sys::open(dst, abi::O_RDONLY), Err(e) if e == abi::ENOENT)
 }

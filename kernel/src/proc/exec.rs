@@ -1,7 +1,9 @@
-//! exec: replace the current process image with a static ELF64 loaded from
-//! a memory blob (xv6 exec.c semantics; the blob is an embedded init or an
-//! S4 file read). Stack layout follows the Linux x86-64 process start ABI
-//! (argc / argv[] / NULL / envp[] / NULL / AT_NULL auxv, strings above).
+//! exec: replace the current process image with a static ELF64 streamed
+//! through a byte-source reader (xv6 exec.c semantics: header and program
+//! headers are read one at a time and PT_LOAD bytes go straight to their
+//! destination pages — no whole-file kernel buffer). Stack layout follows
+//! the Linux x86-64 process start ABI (argc / argv[] / NULL / envp[] /
+//! NULL / AT_NULL auxv, strings above).
 
 use super::proc;
 use super::Proc;
@@ -44,8 +46,9 @@ fn le64(b: &[u8], off: usize) -> u64 {
     u64::from_le_bytes(v)
 }
 
-/// Validate the ELF64 header and hand back (entry, phoff, phnum).
-fn parse_ehdr(b: &[u8]) -> Result<(u64, usize, usize), i64> {
+/// Validate the ELF64 header and hand back (entry, phoff, phnum). `b` is
+/// the EHDR_SIZE header bytes; `fsize` bounds the program-header table.
+fn parse_ehdr(b: &[u8], fsize: usize) -> Result<(u64, usize, usize), i64> {
     if b.len() < EHDR_SIZE || le32(b, 0) != 0x464C_457F {
         return Err(ENOEXEC);
     }
@@ -58,21 +61,21 @@ fn parse_ehdr(b: &[u8]) -> Result<(u64, usize, usize), i64> {
     let phoff = le64(b, 32) as usize;
     let phentsize = le16(b, 54) as usize;
     let phnum = le16(b, 56) as usize;
-    if phentsize != PHDR_SIZE || phoff.saturating_add(phnum * PHDR_SIZE) > b.len() {
+    if phentsize != PHDR_SIZE || phoff.saturating_add(phnum * PHDR_SIZE) > fsize {
         return Err(ENOEXEC);
     }
     Ok((le64(b, 24), phoff, phnum))
 }
 
-fn phdr_at(b: &[u8], phoff: usize, i: usize) -> Phdr {
-    let o = phoff + i * PHDR_SIZE;
+/// Decode one Elf64_Phdr from its PHDR_SIZE bytes.
+fn phdr_from_bytes(b: &[u8]) -> Phdr {
     Phdr {
-        p_type: le32(b, o),
-        p_flags: le32(b, o + 4),
-        p_offset: le64(b, o + 8),
-        p_vaddr: le64(b, o + 16),
-        p_filesz: le64(b, o + 32),
-        p_memsz: le64(b, o + 40),
+        p_type: le32(b, 0),
+        p_flags: le32(b, 4),
+        p_offset: le64(b, 8),
+        p_vaddr: le64(b, 16),
+        p_filesz: le64(b, 32),
+        p_memsz: le64(b, 40),
     }
 }
 
@@ -223,13 +226,24 @@ unsafe fn build_stack(pml4: pgtable::PtPtr, argv: &[&[u8]]) -> Result<usize, i64
 ///
 /// # Safety
 /// `p` is owned or current; when current, CR3 must not be `p`'s new pml4.
+/// Byte source: fill `dst` from file offset `off`, returning bytes read
+/// (readi semantics: > 0, or <= 0 at EOF/error). The sys layer closes over
+/// a locked inode; this layer stays pure about where bytes come from.
+pub type ExecSource<'a> = &'a dyn Fn(&mut [u8], u32) -> i32;
+
 pub unsafe fn exec_elf(
     p: *mut Proc,
     tf: &mut Trapframe,
-    image: &[u8],
+    src: ExecSource,
+    fsize: usize,
     argv: &[&[u8]],
 ) -> Result<(), i64> {
-    let (entry, phoff, phnum) = parse_ehdr(image)?;
+    // Pull the header through the reader (xv6 exec: one header read).
+    let mut ehdr = [0u8; EHDR_SIZE];
+    if src(&mut ehdr, 0) != EHDR_SIZE as i32 {
+        return Err(ENOEXEC);
+    }
+    let (entry, phoff, phnum) = parse_ehdr(&ehdr, fsize)?;
     const MAX_SEGS: usize = 16;
     if phnum > MAX_SEGS {
         return Err(ENOEXEC);
@@ -239,8 +253,12 @@ pub unsafe fn exec_elf(
     // arrays + insertion sort) so mm.sz grows monotonically.
     let mut segs = [[0usize; 5]; MAX_SEGS]; // [vaddr, offset, filesz, memsz, flags]
     let mut nsegs = 0usize;
+    let mut phbuf = [0u8; PHDR_SIZE];
     for i in 0..phnum {
-        let ph = phdr_at(image, phoff, i);
+        if src(&mut phbuf, (phoff + i * PHDR_SIZE) as u32) != PHDR_SIZE as i32 {
+            return Err(ENOEXEC);
+        }
+        let ph = phdr_from_bytes(&phbuf);
         if ph.p_type != PT_LOAD {
             continue;
         }
@@ -280,7 +298,7 @@ pub unsafe fn exec_elf(
             new_mm.free();
             return Err(ENOEXEC);
         }
-        if from.saturating_add(filesz) > image.len() {
+        if from.saturating_add(filesz) > fsize {
             new_mm.free();
             return Err(ENOEXEC);
         }
@@ -289,8 +307,21 @@ pub unsafe fn exec_elf(
             return Err(ENOMEM);
         }
         cursor = end;
-        // SAFETY: range just mapped in new_mm.pml4.
-        unsafe { write_user(new_mm.pml4, vaddr, &image[from..from + filesz]) };
+        // Stream the file bytes to their pages through a bounce buffer
+        // (xv6 loadseg: readi straight into p_vaddr; 512B = BSIZE).
+        let mut bounce = [0u8; 512];
+        let mut done = 0usize;
+        while done < filesz {
+            let want = (filesz - done).min(bounce.len());
+            let n = src(&mut bounce[..want], (from + done) as u32);
+            if n <= 0 || n as usize > want {
+                new_mm.free();
+                return Err(ENOEXEC); // short read: truncated image
+            }
+            // SAFETY: [vaddr+done, vaddr+done+n) just mapped in new_mm.pml4.
+            unsafe { write_user(new_mm.pml4, vaddr + done, &bounce[..n as usize]) };
+            done += n as usize;
+        }
         // Data segments non-executable; code segments executable.
         unsafe { set_nx(new_mm.pml4, vaddr, memsz, (flags & PF_X as usize) == 0) };
         if end > max_end {

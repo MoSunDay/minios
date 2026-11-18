@@ -39,6 +39,7 @@ pub fn m1r_suite_spec() -> SuiteSpec {
             "m1r.user.open_read",
             "m1r.user.pipe",
             "m1r.user.dup_close",
+            "m1r.user.execve_diskcopy",
         ],
     }
 }

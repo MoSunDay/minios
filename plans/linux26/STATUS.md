@@ -281,3 +281,22 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   对每轮副本的合法改写（目录块+新 inode）；模板 `6d5aa94e…cd52`（随新 m1r-suite
   ELF 重建）；M0R `028048dd…92f1` 字节不变；m1r-fault `1fbae812…f967` exit 35；
   test-host 6 组（runner 44 例）、fmt、make all 绿。新文件均 ≤400 行。
+
+2026-11-19 S4d-2 闭环（exec 改走磁盘）：
+
+- proc/exec.rs 换流式字节源：exec_elf(p, tf, src: &dyn Fn(&mut [u8], u32) -> i32,
+  fsize, argv)——ELF 头/程序头逐个读入栈缓冲，PT_LOAD 经 512B 弹跳块直写目标页
+  （xv6 loadseg 语义，不再整文件内核缓冲）；parse_ehdr 的 phdr 表界改对 fsize；
+  phdr_at→phdr_from_bytes（纯字节解码）。
+- syscall.rs sys_execve：copy_path(128) + namei→ilock→readi 闭包→exec_elf→
+  iunlockput（只读不进日志事务）；userimg 嵌入表退役为 pid-1 种子与逐字节比对
+  参照（userinit_named 同经 reader 面喂平铺切片）。exec 路径缓冲 64B→MAXPATH 128。
+- 套件：新增 m1r.user.execve_diskcopy——fd 级 512B 分块拷 /m1r-exec-child→
+  /elfcopy（写路径首个真实使用），fork+execve("/elfcopy")（磁盘独有、不在内嵌表
+  的路径），子映像打印标记并 exit 42 证明字节级等价；unlink 后 open 必须 ENOENT。
+  清单 20 用例（registry+fixture 同步）。
+- 证据（verdict: PASS，exit 33）：m1r-suite serial `6137aefd…e585`（total=20
+  passed=20 failed=0；日志含第二行 replaced image=磁盘副本在跑）；运行盘 root
+  `9e66abf1…4536`（mknod console + elfcopy 创建/删除痕迹）；M0R `028048dd…92f1`
+  字节不变；m1r-fault `1fbae812…f967` exit 35；test-host 6 组（runner 44 例）、
+  fmt、make all 绿。

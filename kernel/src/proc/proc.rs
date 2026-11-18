@@ -350,7 +350,18 @@ pub fn userinit_named(image: &[u8], name: &[u8], argv: &[&[u8]]) -> bool {
         let dst = core::ptr::addr_of_mut!((*p).name) as *mut u8;
         core::ptr::copy_nonoverlapping(name.as_ptr(), dst, name.len().min(16));
         let tf = kstack_tf(p);
-        match exec::exec_elf(p, &mut *tf, image, argv) {
+        // The embedded seed image streams through the same reader surface
+        // every later exec uses (bytes from a flat slice).
+        let read = |dst: &mut [u8], off: u32| -> i32 {
+            let start = off as usize;
+            if start >= image.len() {
+                return 0;
+            }
+            let n = dst.len().min(image.len() - start);
+            dst[..n].copy_from_slice(&image[start..start + n]);
+            n as i32
+        };
+        match exec::exec_elf(p, &mut *tf, &read, image.len(), argv) {
             Ok(()) => {
                 // Root cwd (xv6 userinit's namei("/")); fds stay closed —
                 // the driver opens the console like xv6 init.c.

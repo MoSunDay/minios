@@ -2,8 +2,9 @@
 //! abi crate (Linux 2.6.39.4 x86-64, plans/linux26/02 §5); arguments
 //! arrive in the kernel ABI order rdi rsi rdx r10 r8 r9 (rcx is clobbered
 //! by sysretq). Returns in -4095..-1 are errnos (04 §3). Numbers outside
-//! the whitelist answer -ENOSYS; S3 execve resolves against the embedded
-//! image table (the S4 fs replaces the source).
+//! the whitelist answer -ENOSYS; S4d-2 execve streams the image from the
+//! on-disk inode (the S3 embedded-table source is retired; the embedded
+//! copy remains only as pid-1 seed and byte-compare reference).
 
 use super::sysarg::SyscallArgs;
 use super::traps::Trapframe;
@@ -120,12 +121,11 @@ fn sys_execve(tf: &mut Trapframe, path: usize, argv: usize) -> i64 {
     const MAX_ARGS: usize = 8;
     const ARG_MAX: usize = 64;
 
-    let mut name = [0u8; ARG_MAX];
-    match uaccess::copyinstr(&mut name, path as *const u8) {
+    let mut name = [0u8; syspath::MAXPATH];
+    match syspath::copy_path(&mut name, path) {
         0 => {}
         e => return e,
     }
-    let name_len = name.iter().position(|&b| b == 0).unwrap_or(0);
 
     if argv == 0 {
         return EINVAL;
@@ -157,17 +157,29 @@ fn sys_execve(tf: &mut Trapframe, path: usize, argv: usize) -> i64 {
         nargs += 1;
     }
 
-    let image = match super::userimg::lookup(&name[..name_len]) {
-        Some(img) => img,
-        None => return ENOENT,
-    };
-
     let p = crate::proc::proc::myproc();
     if p.is_null() {
         return ENOENT;
     }
-    // SAFETY: p is the current process; exec_elf swaps CR3 itself.
-    unsafe { crate::proc::exec::exec_elf(p, tf, image, &args[..nargs]).map_or_else(|e| e, |()| 0) }
+    // S4d-2: resolve the path in the on-disk fs and stream the ELF from
+    // the locked inode (xv6 sysfile.c exec: namei -> ilock -> readi ->
+    // iunlockput; read-only, so no log transaction).
+    // SAFETY: cpath is NUL-terminated; the inode protocol is balanced on
+    // every path and the reader runs only while the lock is held.
+    let ip = unsafe { crate::fs::xv6fs::namei::namei(name.as_ptr()) };
+    if ip.is_null() {
+        return ENOENT;
+    }
+    unsafe { crate::fs::xv6fs::inode::ilock(ip) };
+    let fsize = unsafe { (*ip).size } as usize;
+    let read = |dst: &mut [u8], off: u32| unsafe {
+        crate::fs::xv6fs::inode::readi(ip, dst.as_mut_ptr(), off, dst.len() as u32)
+    };
+    // SAFETY: p is the current process; exec_elf swaps CR3 itself and
+    // returns with the image either replaced or the caller's kept.
+    let r = unsafe { crate::proc::exec::exec_elf(p, tf, &read, fsize, &args[..nargs]) };
+    unsafe { crate::fs::xv6fs::inode::iunlockput(ip) };
+    r.map_or_else(|e| e, |()| 0)
 }
 
 /// Timer hook (S3 nanosleep bookkeeping); no-op until the suite lands.

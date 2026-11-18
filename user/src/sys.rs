@@ -141,3 +141,9 @@ pub fn mknod(path: &[u8], major: u64, minor: u64) -> Result<i64, i64> {
     // SAFETY: kernel reads the path via copyinstr.
     call6(abi::SYS_MKNOD, path.as_ptr() as u64, major, minor, 0, 0, 0)
 }
+
+/// unlink(2): remove a directory entry; the inode frees when unlinked.
+pub fn unlink(path: &[u8]) -> Result<i64, i64> {
+    // SAFETY: kernel reads the path via copyinstr.
+    call6(abi::SYS_UNLINK, path.as_ptr() as u64, 0, 0, 0, 0, 0)
+}
