@@ -1,7 +1,8 @@
 //! M1R user-mode suite driver (S3): pid 1 in the `m1r-suite` boot. Runs
 //! the user-space CASE list on the real syscall surface (write/getpid/
 //! fork/wait4/execve/brk/SSE2/registers), prints one CASE line per case,
-//! and exits with (total<<4)|failed so the kernel can merge the verdict.
+//! and exits with (total<<8)|failed so the kernel can merge the verdict
+//! (S4e-2 wide encoding; 4-bit halves retired with the usertests port).
 
 #![no_std]
 #![no_main]
@@ -95,7 +96,7 @@ extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
         failed += 1;
     }
 
-    sys::exit(((total << 4) | failed) as i32)
+    sys::exit(((total << 8) | failed) as i32)
 }
 
 fn run_case(id: &str, check: fn() -> bool) -> bool {

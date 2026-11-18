@@ -12,6 +12,7 @@ pub struct UserImage {
 
 const SUITE_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/userimg/m1r-suite"));
 const EXEC_CHILD_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/userimg/m1r-exec-child"));
+const USERTESTS_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/userimg/usertests"));
 
 /// The embedded image table (S3 image source; S4 adds the fs lookup).
 pub const IMAGES: &[UserImage] = &[
@@ -22,6 +23,10 @@ pub const IMAGES: &[UserImage] = &[
     UserImage {
         path: "/m1r-exec-child",
         elf: EXEC_CHILD_ELF,
+    },
+    UserImage {
+        path: "/usertests",
+        elf: USERTESTS_ELF,
     },
 ];
 

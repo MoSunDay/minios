@@ -13,6 +13,7 @@ pub mod io;
 pub mod mem;
 pub mod rt;
 pub mod sys;
+pub mod utest;
 
 /// The M1R user heap (04 §3): brk-backed, allocation via the Rust `alloc`
 /// crate surface (`extern crate alloc` in the bins); free is a no-op.

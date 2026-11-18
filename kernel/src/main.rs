@@ -1,7 +1,7 @@
 //! Dual-mode kernel entry (D5): the Multiboot cmdline selects the boot
 //! path. No cmdline (the frozen M0R ISO) or `m0r-smoke` keeps the frozen
-//! M0R byte-identical smoke; `m1r-suite` / `m1r-fault` select the M1R
-//! paths; any other cmdline boots the full system (sh, from S4 on).
+//! M0R byte-identical smoke; `m1r-suite` / `m1r-user` / `m1r-fault`
+//! select the M1R paths; any other cmdline boots the full system (sh).
 
 #![no_std]
 #![no_main]
@@ -42,6 +42,7 @@ pub extern "C" fn rust_main(multiboot_magic: u32, multiboot_info_phys: usize) {
 enum BootMode {
     M0rSmoke,
     M1rSuite,
+    M1rUser,
     M1rFault,
     Full,
 }
@@ -50,6 +51,8 @@ fn boot_mode(mbi_phys: usize) -> BootMode {
     let cmd = cmdline(mbi_phys);
     if cmd.contains("m1r-suite") {
         BootMode::M1rSuite
+    } else if cmd.contains("m1r-user") {
+        BootMode::M1rUser
     } else if cmd.contains("m1r-fault") {
         BootMode::M1rFault
     } else if cmd.is_empty() || cmd.contains("m0r-smoke") {
@@ -84,12 +87,14 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
         // and (S4) the block layer against the mkfs root image.
         BootMode::M1rSuite => {
             ksymtab::set_active_suite("m1r");
-            fs::buffer::binit();
-            drivers::block::ide::ideinit();
-            fs::xv6fs::log::loginit(fs::xv6fs::layout::ROOTDEV);
-            fs::xv6fs::iinit();
-            drivers::char::console::consoleinit();
+            init_m1r_fs();
             kernel::suite::run();
+        }
+        // User-mode suite (S4e-2): the xv6 usertests port as pid 1.
+        BootMode::M1rUser => {
+            ksymtab::set_active_suite("m1r-user");
+            init_m1r_fs();
+            kernel::suite::run_user();
         }
         BootMode::Full => {
             ksymtab::set_active_suite("minios");
@@ -98,6 +103,15 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
         }
         BootMode::M0rSmoke => unreachable!(),
     }
+}
+
+/// The S4 fs chain shared by every M1R boot arm (and the full boot).
+fn init_m1r_fs() {
+    fs::buffer::binit();
+    drivers::block::ide::ideinit();
+    fs::xv6fs::log::loginit(fs::xv6fs::layout::ROOTDEV);
+    fs::xv6fs::iinit();
+    drivers::char::console::consoleinit();
 }
 
 pub(crate) fn m1r_fatal(why: &str) -> ! {

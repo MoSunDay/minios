@@ -25,6 +25,7 @@ fn main() {
         Some("check-user-elf") => cmd_check_user_elf(&args[1..]),
         Some("run-smoke") => cmd_run_suite(Suite::M0r, "run-smoke", &args[1..]),
         Some("run-m1r-suite") => cmd_run_suite(Suite::M1rSuite, "run-m1r-suite", &args[1..]),
+        Some("run-m1r-user") => cmd_run_suite(Suite::M1rUser, "run-m1r-user", &args[1..]),
         Some("run-m1r-fault") => cmd_run_suite(Suite::M1rFault, "run-m1r-fault", &args[1..]),
         _ => {
             eprintln!(
@@ -32,6 +33,7 @@ fn main() {
                  \x20 check-elf <kernel-elf>\n\
                  \x20 run-smoke --iso <iso> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-suite --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
+                 \x20 run-m1r-user --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-fault --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]"
             );
             2
@@ -115,6 +117,7 @@ fn cmd_check_elf(args: &[String]) -> i32 {
 enum Suite {
     M0r,
     M1rSuite,
+    M1rUser,
     M1rFault,
 }
 
@@ -132,6 +135,7 @@ impl Suite {
         match self {
             Suite::M0r => "m0r",
             Suite::M1rSuite => "m1r",
+            Suite::M1rUser => "m1r-user",
             Suite::M1rFault => "m1r-fault",
         }
     }
@@ -302,6 +306,7 @@ fn cmd_run_suite(suite: Suite, cmd: &str, args: &[String]) -> i32 {
     let judged = match suite {
         Suite::M0r => verdict::judge(&verdict::m0r_spec(), &outcome).map(|_| 33),
         Suite::M1rSuite => verdict::judge(&verdict::m1r_suite_spec(), &outcome).map(|_| 33),
+        Suite::M1rUser => verdict::judge(&verdict::m1r_user_spec(), &outcome).map(|_| 33),
         Suite::M1rFault => verdict::judge_fault(&verdict::m1r_fault_spec(), &outcome)
             .map(|_| verdict::EXPECTED_FAULT_EXIT_CODE),
     };

@@ -321,3 +321,29 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   模板 `dff04779…4321`（16 ELF）；运行盘 `49d9ec0e…9860`；M0R `028048dd…92f1`
   字节不变；m1r-fault exit 35；test-host、fmt、make all 绿（user-build 0 警告）。
   sh.rs 376 行、ls.rs 122 行（≤400）。
+
+2026-11-19 S4e-2 闭环（usertests 全量移植 35 例 + QEMU 轮 + 6 处内核缺陷修复）：
+
+- 用户测试体 user/src/utest/（mod/mem/fs_basic/ipc/fs_names/fs_link/fs_big/
+  exec/prog，各文件 ≤355 行）：35 例 = m1r_user_spec() 冻结清单——xv6.mem 2、
+  xv6.fs 15（含 sharedfd/createdelete/twofiles/bigdir）、xv6.ipc 3、xv6.exec 1、
+  xv6.prog 14（run_capture：fork+pipe 重定向+exec_argv+wait4 断言 stdout/退出码）。
+  驱动 usertests.rs 以 (total<<8)|failed 编码退出；finish_driver 解码；用户态缺页
+  → oops::user_fault → 套件 fatal（exit 37）语义保持。
+- 内核修复（对照 link_repos/xv6 逐条）：①traps_dispatch killed 分支补 EOI（抢占
+  死锁）；②growproc 提交 mm.sz（brk(0) 陈旧）；③sys_unlink 拒 "."/".."（EINVAL，
+  rmdot 自锁）；④create() 收紧为 xv6-public 严格规则——仅 file-on-file 复用
+  inode，mkdir/open(O_CREAT) 撞已有目录项一律 EEXIST（fourteen 依赖）；⑤
+  USER_STACK_PAGES 2→8（bigwrite 8KB 栈帧溢出）；⑥**filewrite/fileread 共享偏移
+  丢失更新**——原在 ilock 外快照 FileState.off、锁内回写整枚举，父/子共享同一
+  File 时后写者以陈旧 off 覆盖（sharedfd 症状 nc=10000/np=0、两个 0 起点
+  单调流）；改为锁内重读 off、锁窗内回写 off+r（xv6 `f->off += r` 语义）。
+- 测试侧缺陷同步修复：createtest 两处 Ok-fd 未 close（fd3/fd4 泄漏随 fork 复
+  制）；sharedfd 诊断序 close→fstat 改为 fstat→close。
+- 装配：BootMode::M1rUser（userimg 以 usertests 为 pid-1 种子）；scripts/
+  m1r-user-grub.cfg；Makefile m1r-user-iso/test-qemu-user；runner Suite::M1rUser
+  + 35 例 spec + len==35 fixture。
+- 证据（verdict: PASS，exit 33）：m1r-user serial `0c39a3e5…08d3`
+  （total=35 passed=35 failed=0，35 个 CASE id 唯一）、root `a5a140d6…c947`；
+  m1r-suite `6137aefd…e585` 字节不变、M0R `028048dd…92f1` 字节不变（证明 6 处
+  内核修改不扰动既有两套）；test-host 47 例、fmt、make all（user-build 0 警告）绿。

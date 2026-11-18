@@ -8,7 +8,9 @@ mod m0r;
 mod m1r;
 
 pub use m0r::m0r_spec;
-pub use m1r::{judge_fault, m1r_fault_spec, m1r_suite_spec, EXPECTED_FAULT_EXIT_CODE};
+pub use m1r::{
+    judge_fault, m1r_fault_spec, m1r_suite_spec, m1r_user_spec, EXPECTED_FAULT_EXIT_CODE,
+};
 
 pub const MARKER_PREFIX: &str = "MINIOS_X86_64_TEST_";
 pub const MARKER_PASS: &str = "MINIOS_X86_64_TEST_PASS_V1";

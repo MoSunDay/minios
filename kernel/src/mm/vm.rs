@@ -11,7 +11,10 @@ pub struct Mm {
 }
 
 pub const USER_STACK_TOP: usize = 0x0000_4000_0000_0000;
-pub const USER_STACK_PAGES: usize = 2;
+/// Eight pages (32 KiB): xv6's single page suits PDP-style C locals, but
+/// the Rust user runtime's frames (and the usertests ports' buffers) need
+/// headroom below USER_STACK_TOP.
+pub const USER_STACK_PAGES: usize = 8;
 
 impl Mm {
     /// Empty user aspace (kernel half shared).

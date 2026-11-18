@@ -29,6 +29,9 @@ static KERNEL_TOTAL: AtomicU8 = AtomicU8::new(0);
 static KERNEL_PASSED: AtomicU8 = AtomicU8::new(0);
 /// Set once the user driver phase is armed (pid 1 seeded).
 static USER_PHASE: AtomicBool = AtomicBool::new(false);
+/// Driver suite identity: false = merged m1r (kernel+user), true = the
+/// m1r-user round (xv6 usertests port, no kernel-phase cases).
+static DRIVER_IS_USER: AtomicBool = AtomicBool::new(false);
 
 /// True while pid 1 (the suite driver) runs the user phase.
 pub fn user_phase_armed() -> bool {
@@ -38,8 +41,10 @@ pub fn user_phase_armed() -> bool {
 /// Merge verdicts and exit QEMU. Called from proc::exit when the armed
 /// suite driver exits; `status` is its encoded (total<<4)|failed exit.
 pub fn finish_driver(status: i32) -> ! {
-    let user_total = ((status >> 4) & 0xf) as u8;
-    let user_failed = (status & 0xf) as u8;
+    // S4e-2 wide encoding: 8 bits of failed, then total (35 usertests
+    // cases no longer fit xv6's 4-bit halves).
+    let user_total = ((status >> 8) & 0xff) as u8;
+    let user_failed = (status & 0xff) as u8;
     let total = KERNEL_TOTAL
         .load(Ordering::SeqCst)
         .saturating_add(user_total);
@@ -47,10 +52,19 @@ pub fn finish_driver(status: i32) -> ! {
         .load(Ordering::SeqCst)
         .saturating_add(user_total.saturating_sub(user_failed));
     let failed = total - passed;
-    if failed == 0 {
-        console::write_str("MINIOS_X86_64_TEST_PASS_V1 suite=m1r run=core-up total=");
+    let suite = if DRIVER_IS_USER.load(Ordering::SeqCst) {
+        "m1r-user"
     } else {
-        console::write_str("MINIOS_X86_64_TEST_FAIL_V1 suite=m1r run=core-up total=");
+        "m1r"
+    };
+    if failed == 0 {
+        console::write_str("MINIOS_X86_64_TEST_PASS_V1 suite=");
+        console::write_str(suite);
+        console::write_str(" run=core-up total=");
+    } else {
+        console::write_str("MINIOS_X86_64_TEST_FAIL_V1 suite=");
+        console::write_str(suite);
+        console::write_str(" run=core-up total=");
     }
     write_decimal(total);
     console::write_str(" passed=");
@@ -94,6 +108,22 @@ pub fn run() -> ! {
         None => crate::m1r_fatal("m1r-suite image missing"),
     };
     if !crate::proc::proc::userinit_named(image, b"m1r-suite", &[b"m1r-suite"]) {
+        crate::m1r_fatal("userinit failed");
+    }
+    USER_PHASE.store(true, Ordering::SeqCst);
+    crate::proc::sched::sched_entry();
+}
+
+/// The m1r-user round (S4e-2): no kernel-phase cases — seed pid 1
+/// straight from the embedded /usertests image and arm the same
+/// finish-on-initproc-exit gate under the m1r-user suite label.
+pub fn run_user() -> ! {
+    DRIVER_IS_USER.store(true, Ordering::SeqCst);
+    let image = match super::userimg::lookup(b"/usertests") {
+        Some(img) => img,
+        None => crate::m1r_fatal("usertests image missing"),
+    };
+    if !crate::proc::proc::userinit_named(image, b"usertests", &[b"usertests"]) {
         crate::m1r_fatal("userinit failed");
     }
     USER_PHASE.store(true, Ordering::SeqCst);

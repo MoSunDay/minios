@@ -90,6 +90,60 @@ fn judge_bad(log: &str, exit: Option<i32>, needle: &str) {
     );
 }
 
+/// One legal complete m1r-user log: every case PASS + the frozen marker
+/// (built from the spec so spec and fixture cannot drift apart).
+fn good_m1r_user_log() -> String {
+    let mut log = String::from("loading minios x86_64 M1R user suite\r\n");
+    let cases = m1r_user_spec().expected_cases;
+    for id in cases {
+        log.push_str(&format!("CASE {id} PASS\n"));
+    }
+    log.push_str(&format!(
+        "MINIOS_X86_64_TEST_PASS_V1 suite=m1r-user run=core-up total={} passed={} failed=0 skipped=0\n",
+        cases.len(),
+        cases.len()
+    ));
+    log
+}
+
+#[test]
+fn m1r_user_valid_log_is_green() {
+    let outcome = RunOutcome {
+        serial_log: good_m1r_user_log(),
+        exit_code: Some(EXPECTED_EXIT_CODE),
+        timed_out: false,
+    };
+    assert!(judge(&m1r_user_spec(), &outcome).is_ok());
+}
+
+#[test]
+fn m1r_user_missing_case_is_red() {
+    let log = good_m1r_user_log().replace("CASE xv6.fs.subdir PASS\n", "");
+    let outcome = RunOutcome {
+        serial_log: log,
+        exit_code: Some(EXPECTED_EXIT_CODE),
+        timed_out: false,
+    };
+    let errs = judge(&m1r_user_spec(), &outcome).expect_err("must be red");
+    assert!(errs
+        .iter()
+        .any(|e| e.contains("missing expected case xv6.fs.subdir")));
+}
+
+#[test]
+fn m1r_user_wrong_suite_marker_is_red() {
+    let log = good_m1r_user_log().replace("suite=m1r-user", "suite=m1r");
+    let outcome = RunOutcome {
+        serial_log: log,
+        exit_code: Some(EXPECTED_EXIT_CODE),
+        timed_out: false,
+    };
+    let errs = judge(&m1r_user_spec(), &outcome).expect_err("must be red");
+    assert!(errs
+        .iter()
+        .any(|e| e.contains("marker suite=m1r, expected m1r-user")));
+}
+
 #[test]
 fn m1r_suite_valid_log_is_green() {
     let outcome = RunOutcome {
@@ -279,6 +333,9 @@ fn specs_are_frozen() {
     let suite = m1r_suite_spec();
     assert_eq!(suite.suite, "m1r");
     assert_eq!(suite.expected_cases.len(), 20);
+    let user = m1r_user_spec();
+    assert_eq!(user.suite, "m1r-user");
+    assert_eq!(user.expected_cases.len(), 35);
     let fault = m1r_fault_spec();
     assert_eq!(fault.suite, "m1r-fault");
     assert_eq!(fault.cases.len(), 5);

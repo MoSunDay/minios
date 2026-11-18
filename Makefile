@@ -20,12 +20,15 @@ RUNNER   := cargo run --offline -q -p minios-runner --target $(HOST_TARGET) --
 # the disk over later.
 GRUB_CFG := scripts/m0r-grub-early.cfg
 M1R_SUITE_CFG := scripts/m1r-suite-grub.cfg
+M1R_USER_CFG := scripts/m1r-user-grub.cfg
 M1R_FAULT_CFG := scripts/m1r-fault-grub.cfg
 ISO_DIR  := $(TARGET_DIR)/m0r-iso
 M1R_SUITE_DIR := $(TARGET_DIR)/m1r-suite-iso
+M1R_USER_DIR := $(TARGET_DIR)/m1r-user-iso
 M1R_FAULT_DIR := $(TARGET_DIR)/m1r-fault-iso
 ISO      := $(ISO_DIR)/minios-m0r.iso
 M1R_SUITE_ISO := $(M1R_SUITE_DIR)/minios-m1r-suite.iso
+M1R_USER_ISO := $(M1R_USER_DIR)/minios-m1r-user.iso
 M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
 # M1R S3 user chain: the user crate builds through its own target dir and
 # RUSTFLAGS (rust-lld + own link script + static non-PIE ET_EXEC); these
@@ -34,13 +37,13 @@ M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
 USER_TARGET := $(CURDIR)/target-user
 USER_RELEASE := $(USER_TARGET)/x86_64-unknown-linux-gnu/release
 # S4e: the xv6 program set rides the root image (dirent order = this
-# list; usertests joins when its suite lands).
+# list; +usertests since S4e-2 — 19 dirents = 304 bytes, one block).
 USER_ELFS := $(USER_RELEASE)/m1r-suite $(USER_RELEASE)/m1r-exec-child \
   $(USER_RELEASE)/cat $(USER_RELEASE)/echo $(USER_RELEASE)/forktest \
   $(USER_RELEASE)/grep $(USER_RELEASE)/init $(USER_RELEASE)/kill \
   $(USER_RELEASE)/ln $(USER_RELEASE)/ls $(USER_RELEASE)/mkdir \
   $(USER_RELEASE)/rm $(USER_RELEASE)/sh $(USER_RELEASE)/stressfs \
-  $(USER_RELEASE)/wc $(USER_RELEASE)/zombie
+  $(USER_RELEASE)/usertests $(USER_RELEASE)/wc $(USER_RELEASE)/zombie
 export MINIOS_USER_IMG_DIR := $(USER_RELEASE)
 # rust-lld speaks GNU-ld when invoked as ld.lld (argv[0] flavor); the
 # symlink below is pure invocation plumbing, still the toolchain lld.
@@ -52,12 +55,13 @@ USER_RUSTFLAGS := -C linker=ld.lld -C linker-flavor=ld \
 
 RUN_DIR  := $(TARGET_DIR)/m0r-run
 M1R_SUITE_RUN := $(TARGET_DIR)/m1r-suite-run
+M1R_USER_RUN := $(TARGET_DIR)/m1r-user-run
 M1R_FAULT_RUN := $(TARGET_DIR)/m1r-fault-run
 ROOT_TEMPLATE := $(TARGET_DIR)/root-template.raw
 GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial echo boot search memdisk
 
-.PHONY: all build user-build check-user-elf check-layout m0r-iso m1r-iso m1r-fault-iso \
-        test-qemu-smoke run-smoke test-qemu test-expected-fault test test-host fmt fmt-check \
+.PHONY: all build user-build check-user-elf check-layout m0r-iso m1r-iso m1r-user-iso m1r-fault-iso \
+        test-qemu-smoke run-smoke test-qemu test-qemu-user test-expected-fault test test-host fmt fmt-check \
         clean legacy-user
 
 all: build check-user-elf check-layout
@@ -122,6 +126,9 @@ m1r-iso: build
 m1r-fault-iso: build
 	$(call make-m1r-iso,$(M1R_FAULT_DIR),$(M1R_FAULT_CFG),$(M1R_FAULT_ISO))
 
+m1r-user-iso: build
+	$(call make-m1r-iso,$(M1R_USER_DIR),$(M1R_USER_CFG),$(M1R_USER_ISO))
+
 # Root-disk template: the xv6 root image built by the S4 Rust mkfs
 # (minios-tools, plans/linux26/04 §5; byte-parity with tools/mkfs.c
 # proven at port time). Never attached to QEMU directly: every round
@@ -148,6 +155,14 @@ test-qemu: m1r-iso $(ROOT_TEMPLATE)
 	@cp $(ROOT_TEMPLATE) $(M1R_SUITE_RUN)/root.raw
 	$(RUNNER) run-m1r-suite --iso $(M1R_SUITE_ISO) --root $(M1R_SUITE_RUN)/root.raw --work-dir $(M1R_SUITE_RUN)
 	@sha256sum $(M1R_SUITE_RUN)/serial.log $(M1R_SUITE_RUN)/root.raw
+
+# M1R user-mode suite (S4e-2): the xv6 usertests port as pid 1.
+test-qemu-user: m1r-user-iso $(ROOT_TEMPLATE)
+	@rm -rf $(M1R_USER_RUN)
+	@mkdir -p $(M1R_USER_RUN)
+	@cp $(ROOT_TEMPLATE) $(M1R_USER_RUN)/root.raw
+	$(RUNNER) run-m1r-user --iso $(M1R_USER_ISO) --root $(M1R_USER_RUN)/root.raw --work-dir $(M1R_USER_RUN)
+	@sha256sum $(M1R_USER_RUN)/serial.log $(M1R_USER_RUN)/root.raw
 
 # M1R expected-fault suite: dedicated log namespace + verdict (40 §2.1.6);
 # argv identical to test-qemu except the -cdrom image (construction

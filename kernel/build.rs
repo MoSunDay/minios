@@ -192,7 +192,7 @@ fn stage_user_images(out_dir: &std::path::Path) {
     } else {
         println!("cargo:rerun-if-changed={}", src_root.display());
     }
-    for name in ["m1r-suite", "m1r-exec-child"] {
+    for name in ["m1r-suite", "m1r-exec-child", "usertests"] {
         let src = src_root.join(name);
         let dst = dir.join(name);
         let bytes = match fs::read(&src) {

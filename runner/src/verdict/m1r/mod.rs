@@ -44,6 +44,53 @@ pub fn m1r_suite_spec() -> SuiteSpec {
     }
 }
 
+/// m1r-user v1 (S4e-2): the xv6 usertests battery as its own boot round
+/// (pid 1 = /usertests; no kernel-phase cases, PASS exit 33 under the
+/// suite=m1r-user marker). Case ids mirror user/src/utest CASES in order.
+pub fn m1r_user_spec() -> SuiteSpec {
+    SuiteSpec {
+        suite: "m1r-user",
+        run: "core-up",
+        expected_cases: &[
+            "xv6.mem.bsstest",
+            "xv6.mem.sbrk",
+            "xv6.fs.opentest",
+            "xv6.fs.writetest",
+            "xv6.fs.writetest1",
+            "xv6.fs.createtest",
+            "xv6.ipc.pipe1",
+            "xv6.ipc.preempt",
+            "xv6.ipc.exitwait",
+            "xv6.fs.rmdot",
+            "xv6.fs.fourteen",
+            "xv6.fs.bigwrite",
+            "xv6.fs.bigfile",
+            "xv6.fs.subdir",
+            "xv6.fs.linkunlink",
+            "xv6.fs.linktest",
+            "xv6.fs.unlinkread",
+            "xv6.fs.createdelete",
+            "xv6.fs.twofiles",
+            "xv6.fs.sharedfd",
+            "xv6.fs.dirfile",
+            "xv6.fs.bigdir",
+            "xv6.exec.exectest",
+            "xv6.prog.echo",
+            "xv6.prog.cat",
+            "xv6.prog.grep",
+            "xv6.prog.wc",
+            "xv6.prog.ls",
+            "xv6.prog.mkdir",
+            "xv6.prog.rm",
+            "xv6.prog.ln",
+            "xv6.prog.kill",
+            "xv6.prog.zombie",
+            "xv6.prog.forktest",
+            "xv6.prog.stressfs",
+        ],
+    }
+}
+
 /// m1r-fault PASS exit code (D-1): 0x11 -> QEMU 35, a namespace distinct
 /// from the ordinary-suite 33.
 pub const EXPECTED_FAULT_EXIT_CODE: i32 = 35;

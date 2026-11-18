@@ -162,15 +162,27 @@ pub unsafe fn fileread(f: *mut File, dst: *mut u8, n: i32) -> i32 {
     if unsafe { (*f).readable } == 0 {
         return -1;
     }
-    // SAFETY: FileState is Copy; snapshot, advance the offset, write back.
     match unsafe { (*f).state } {
         FileState::Pipe { pipe, .. } => unsafe { piperead(pipe, dst, n) },
-        FileState::Inode { ip, mut off } => unsafe {
+        FileState::Inode { ip, .. } => unsafe {
             ilock(ip);
+            // Read the shared offset under the inode lock (xv6 reads
+            // f->off inside ilock): concurrent users of this File —
+            // e.g. parent and child after fork — serialize on the same
+            // offset instead of losing each other's updates.
+            let off = match (*f).state {
+                FileState::Inode { off, .. } => off,
+                _ => {
+                    iunlock(ip);
+                    panic!("fileread")
+                }
+            };
             let r = readi(ip, dst, off, n as u32);
             if r > 0 {
-                off += r as u32;
-                (*f).state = FileState::Inode { ip, off };
+                (*f).state = FileState::Inode {
+                    ip,
+                    off: off + r as u32,
+                };
             }
             iunlock(ip);
             r
@@ -186,10 +198,9 @@ pub unsafe fn filewrite(f: *mut File, src: *const u8, n: i32) -> i32 {
     if unsafe { (*f).writable } == 0 {
         return -1;
     }
-    // SAFETY: FileState is Copy; snapshot, advance the offset, write back.
     match unsafe { (*f).state } {
         FileState::Pipe { pipe, .. } => unsafe { pipewrite(pipe, src, n) },
-        FileState::Inode { ip, mut off } => unsafe {
+        FileState::Inode { ip, .. } => unsafe {
             // Write a few blocks at a time to avoid exceeding the maximum
             // log transaction size, including i-node, indirect block,
             // allocation blocks, and 2 blocks of slop for non-aligned
@@ -203,10 +214,25 @@ pub unsafe fn filewrite(f: *mut File, src: *const u8, n: i32) -> i32 {
                 }
                 begin_op();
                 ilock(ip);
+                // Re-read the shared offset under the inode lock and store
+                // the advanced offset before unlocking (xv6 does
+                // `f->off += r` inside the ilock window). Snapshotting the
+                // offset outside the lock loses updates when two processes
+                // share one File (usertests sharedfd).
+                let off = match (*f).state {
+                    FileState::Inode { off, .. } => off,
+                    _ => {
+                        iunlock(ip);
+                        end_op();
+                        return -1;
+                    }
+                };
                 let r = writei(ip, src.add(i as usize), off, n1 as u32);
                 if r > 0 {
-                    off += r as u32;
-                    (*f).state = FileState::Inode { ip, off };
+                    (*f).state = FileState::Inode {
+                        ip,
+                        off: off + r as u32,
+                    };
                 }
                 iunlock(ip);
                 end_op();

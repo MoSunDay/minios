@@ -15,11 +15,11 @@ use crate::fs::xv6fs::inode::{
 };
 use crate::fs::xv6fs::layout::{Dirent, DIRSIZ, T_DEV, T_DIR, T_FILE};
 use crate::fs::xv6fs::log::{begin_op, end_op};
-use crate::fs::xv6fs::namei::{dirlink, dirlookup, namei, nameiparent};
+use crate::fs::xv6fs::namei::{dirlink, dirlookup, namecmp, namei, nameiparent};
 use crate::mm::uaccess;
 use crate::proc::proc::myproc;
 
-use abi::{EEXIST, EISDIR, ENOENT, ENOTDIR, ENOTEMPTY, O_CREAT, O_RDWR, O_WRONLY};
+use abi::{EEXIST, EINVAL, EISDIR, ENOENT, ENOTDIR, ENOTEMPTY, O_CREAT, O_RDWR, O_WRONLY};
 
 /// Kernel-side path buffer bound (xv6 has no MAXPATH; paths are only ever
 /// component-bound by DIRSIZ in namei, so a modest bound suffices).
@@ -54,13 +54,16 @@ unsafe fn create(path: *const u8, type_: i16, major: i16, minor: i16) -> *mut In
         ilock(dp);
         let ip = dirlookup(dp, name.as_ptr(), core::ptr::null_mut());
         if !ip.is_null() {
+            // sysfile.c create(): an existing entry is reused only for
+            // file-on-file; mkdir on anything existing (or open(O_CREAT)
+            // over a dir) fails. This is what usertests fourteen relies on.
             iunlockput(dp);
             ilock(ip);
-            if type_ != T_FILE && (*ip).type_ != type_ {
-                iunlockput(ip);
-                return core::ptr::null_mut();
+            if type_ == T_FILE && (*ip).type_ == T_FILE {
+                return ip;
             }
-            return ip;
+            iunlockput(ip);
+            return core::ptr::null_mut();
         }
 
         let ip = ialloc((*dp).dev, type_);
@@ -280,6 +283,15 @@ pub fn sys_unlink(path: usize) -> i64 {
             return ENOENT;
         }
         ilock(dp);
+        // Cannot unlink "." or ".." (fs.c sys_unlink): the entry resolves
+        // to `dp` itself, so a later ilock(ip) would self-deadlock.
+        if namecmp(name.as_ptr(), b".\0".as_ptr()) == 0
+            || namecmp(name.as_ptr(), b"..\0".as_ptr()) == 0
+        {
+            iunlockput(dp);
+            end_op();
+            return EINVAL;
+        }
         let mut off: u32 = 0;
         let ip = dirlookup(dp, name.as_ptr(), &raw mut off);
         if ip.is_null() {

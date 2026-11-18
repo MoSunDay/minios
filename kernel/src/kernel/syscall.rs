@@ -11,7 +11,7 @@ use super::traps::Trapframe;
 use super::{sysfile, syspath};
 use crate::mm::uaccess;
 
-pub use abi::{ECHILD, EINVAL, ENOENT, ENOSYS, ESRCH};
+pub use abi::{ECHILD, EINTR, EINVAL, ENOENT, ENOSYS, ESRCH};
 
 /// Linux x86-64 syscall numbers (abi crate re-export for dispatch match).
 use abi::{
@@ -43,7 +43,8 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         SYS_GETPID => sys_getpid(),
         SYS_EXECVE => sys_execve(tf, a.arg_usize(0), a.arg_usize(1)),
         SYS_EXIT | SYS_EXIT_GROUP => {
-            crate::proc::proc::exit(a.arg_i32(0) & 0xff);
+            // Full i32: the suite driver encodes (total<<8)|failed (S4e-2).
+            crate::proc::proc::exit(a.arg_i32(0));
         }
         SYS_WAIT4 => sys_wait4(a.wait_pid(0), a.arg_opt_ptr(1)),
         SYS_KILL => {
@@ -218,6 +219,12 @@ fn sys_nanosleep(req: usize) -> i64 {
             );
             // SAFETY: sleep returns with TICK_LOCK held.
             crate::kernel::time::TICK_LOCK.raw_release();
+            // xv6 sys_sleep: a killed sleeper aborts (EINTR); the next
+            // timer trap from user mode exits it (traps_dispatch).
+            let p = crate::proc::proc::myproc();
+            if !p.is_null() && (*p).killed != 0 {
+                return EINTR;
+            }
         }
     }
     0

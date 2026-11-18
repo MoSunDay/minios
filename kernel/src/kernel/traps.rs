@@ -178,6 +178,21 @@ fn fixup_or_oops(tf: &mut Trapframe, why: &str) {
 /// C entry from isr_common.
 #[unsafe(no_mangle)]
 pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
+    // xv6 usertrap(): a killed process exits on its next trap from user
+    // mode; kernel/boot-context traps (CPL0) have no such owner.
+    if tf.from_user() {
+        let p = crate::proc::proc::myproc();
+        if !p.is_null() && unsafe { (*p).killed } != 0 {
+            // Ack an in-service IRQ line before abandoning this trap: exit()
+            // never returns, so skipping the normal EOI would leave the PIC
+            // in-service bit set and starve every lower-priority line (no
+            // timer ticks => no preemption => total deadlock).
+            if tf.vector >= IRQ_BASE {
+                crate::drivers::pic::eoi(tf.vector as u8);
+            }
+            crate::proc::proc::exit(-1);
+        }
+    }
     match tf.vector {
         IRQ_TIMER => super::time::tick(tf),
         IRQ_IDE => crate::drivers::block::ide::ideintr(),

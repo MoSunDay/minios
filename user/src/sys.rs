@@ -43,8 +43,9 @@ pub fn call6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> R
 
 /// The never-returning exits (the kernel reaper owns the rest).
 pub fn exit(status: i32) -> ! {
-    // SAFETY: terminal call; never returns to this frame.
-    unsafe { syscall6(abi::SYS_EXIT, status as u64 & 0xff, 0, 0, 0, 0, 0) };
+    // SAFETY: terminal call; never returns to this frame. The full i32
+    // carries the driver verdict (S4e-2): (total<<8)|failed.
+    unsafe { syscall6(abi::SYS_EXIT, status as u64, 0, 0, 0, 0, 0) };
     unreachable!("exit returned");
 }
 

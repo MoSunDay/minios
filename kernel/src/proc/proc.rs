@@ -328,6 +328,7 @@ pub fn growproc(n: i64) -> usize {
     } else if mm.dealloc(old, new) == 0 {
         return 0;
     }
+    mm.sz = new;
     new
 }
 
