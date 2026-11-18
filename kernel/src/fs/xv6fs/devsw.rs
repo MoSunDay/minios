@@ -11,6 +11,7 @@ pub type DevWriteFn = unsafe fn(ip: *mut Inode, src: *const u8, n: i32) -> i32;
 #[derive(Clone, Copy)]
 pub struct DevSwitch {
     pub read: Option<DevReadFn>,
+    #[allow(dead_code)] // S4d: devsw_write()/writei() dispatch lands then
     pub write: Option<DevWriteFn>,
 }
 
@@ -26,6 +27,7 @@ static mut DEVSW: [DevSwitch; NDEV] = [DevSwitch {
 /// # Safety
 /// must only be called during boot, before any T_DEV inode can be read or
 /// written (xv6 fills devsw[] in consoleinit without locking).
+#[allow(dead_code)] // S4d: console init registers major 1 at boot
 pub unsafe fn register_dev(major: i16, read: Option<DevReadFn>, write: Option<DevWriteFn>) {
     assert!((major as usize) < NDEV, "register_dev: bad major");
     DEVSW[major as usize] = DevSwitch { read, write };
@@ -43,6 +45,7 @@ pub unsafe fn devsw_read(major: i16) -> Option<DevReadFn> {
 ///
 /// # Safety
 /// caller must have bounds-checked `major` into 0..NDEV.
+#[allow(dead_code)] // S4d: writei() dispatches T_DEV writes
 pub unsafe fn devsw_write(major: i16) -> Option<DevWriteFn> {
     DEVSW[major as usize].write
 }

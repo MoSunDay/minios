@@ -20,7 +20,8 @@ use crate::fs::xv6fs::layout::{
 };
 use crate::fs::xv6fs::log::log_write;
 use crate::fs::xv6fs::{bmap, itrunc, readsb};
-use crate::kernel::sched::{acquire, release, sleep, wakeup, RawLock};
+use crate::klib::sync::Spinlock;
+use crate::proc::sleep::{sleep, wakeup};
 use core::mem::size_of;
 
 /// file.h: in-memory inode flags.
@@ -76,10 +77,24 @@ pub struct ICache {
 
 // SAFETY: entries are guarded by ICACHE_LOCK (plus the I_BUSY protocol for
 // the embedded inode fields); the statics are unique.
-static ICACHE_LOCK: RawLock = RawLock::new("icache");
+static ICACHE_LOCK: Spinlock<()> = Spinlock::new("icache", ());
 static mut ICACHE: ICache = ICache {
     inode: [Inode::empty(); NINODE],
 };
+
+/// xv6 acquire()/release() spelling over the spinlock primitive (the raw
+/// pair is required: sleep() drops the lock mid-critical-section).
+/// SAFETY: caller must balance each acquire with a release of the same lock.
+#[inline]
+unsafe fn acquire(l: &Spinlock<()>) {
+    l.raw_lock();
+}
+
+/// SAFETY: the lock must be held by this context.
+#[inline]
+unsafe fn release(l: &Spinlock<()>) {
+    l.raw_release();
+}
 
 /// Find the inode with number inum on device dev and return the in-memory
 /// copy. Does not lock the inode and does not read it from disk. (fs.c iget)
@@ -139,6 +154,7 @@ pub unsafe fn idup(ip: *mut Inode) -> *mut Inode {
 ///
 /// # Safety
 /// caller must be inside a begin_op/end_op transaction (log_write is used).
+#[allow(dead_code)] // S4d: sys_open/create/mkdir allocate inodes
 pub unsafe fn ialloc(dev: u32, type_: i16) -> *mut Inode {
     let sb: Superblock = readsb(dev);
 
@@ -291,6 +307,7 @@ pub unsafe fn iunlockput(ip: *mut Inode) {
 ///
 /// # Safety
 /// `ip` must be locked; `st` must be valid for writes.
+#[allow(dead_code)] // S4d: sys_fstat
 pub unsafe fn stati(ip: *const Inode, st: *mut Stat) {
     unsafe {
         (*st).dev = (*ip).dev as i32;
@@ -349,6 +366,7 @@ pub unsafe fn readi(ip: *mut Inode, dst: *mut u8, mut off: u32, mut n: u32) -> i
 /// # Safety
 /// `ip` must be locked; `src` must be valid for `n` bytes (may be user
 /// memory). Caller must have called [`crate::fs::xv6fs::log::begin_op`].
+#[allow(dead_code)] // S4d: write path lands with the file table
 pub unsafe fn writei(ip: *mut Inode, src: *const u8, mut off: u32, n: u32) -> i32 {
     unsafe {
         if (*ip).type_ == T_DEV {

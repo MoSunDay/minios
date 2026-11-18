@@ -146,7 +146,6 @@ pub unsafe fn bread(dev: u32, sector: u32) -> *mut Buf {
 ///
 /// # Safety
 /// `bp` must be B_BUSY from bread/bget.
-#[allow(dead_code)] // S4c: the xv6fs log layer writes through here
 pub unsafe fn bwrite(bp: *mut Buf) {
     // SAFETY: B_BUSY ownership upheld.
     unsafe {

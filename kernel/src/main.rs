@@ -85,6 +85,8 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
             ksymtab::set_active_suite("m1r");
             fs::buffer::binit();
             drivers::block::ide::ideinit();
+            fs::xv6fs::log::loginit(fs::xv6fs::layout::ROOTDEV);
+            fs::xv6fs::iinit();
             kernel::suite::run();
         }
         BootMode::Full => {

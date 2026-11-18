@@ -82,6 +82,7 @@ pub const T_DEV: i16 = 3; // Device
 /// `struct stat` (stat.h), as filled in by `stati()`.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+#[allow(dead_code)] // S4d: sys_fstat
 pub struct Stat {
     /// Type of file.
     pub type_: i16,
@@ -122,6 +123,7 @@ impl Default for Dirent {
 /// Maximum number of active i-nodes (param.h NINODE).
 pub const NINODE: usize = 50;
 /// Size of disk block cache (param.h NBUF).
+#[allow(dead_code)] // bio.c port in fs/buffer.rs owns the live constant
 pub const NBUF: usize = 30;
 // NFILE (open files per system) lives in crate::fs (param.h side owned by
 // file_table); layout.rs deliberately does not define it.
@@ -134,7 +136,7 @@ pub const MAXOPBLOCKS: i32 = 10;
 /// Maximum major device number (param.h NDEV).
 pub const NDEV: usize = 10;
 /// Device number of file system root disk (param.h ROOTDEV).
-pub const ROOTDEV: u32 = 1; // fs.img is the second IDE drive (xv6: hdb)
+pub const ROOTDEV: u32 = 0; // minios: fs disk is IDE index 0 (ide.rs DEV_ROOT)
 /// File system image size in blocks (advisory; `sb.size` on disk is
 /// authoritative — the classic `tools/mkfs.c` builds a 1024-block image).
 #[allow(dead_code)] // header value; mkfs.c owns the actual image size

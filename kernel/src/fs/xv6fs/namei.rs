@@ -79,6 +79,7 @@ pub unsafe fn dirlookup(dp: *mut Inode, name: *const u8, poff: *mut u32) -> *mut
 /// # Safety
 /// `dp` must be locked; `name` NUL-terminated; caller must be inside a
 /// begin_op/end_op transaction.
+#[allow(dead_code)] // S4d: sys_open/create/link append dirents
 pub unsafe fn dirlink(dp: *mut Inode, name: *const u8, inum: u32) -> i32 {
     unsafe {
         // Check that name is not present.
@@ -190,8 +191,18 @@ unsafe fn namex(path: *const u8, nameiparent: bool, name: &mut [u8; DIRSIZ]) -> 
         if *path == b'/' {
             ip = iget(ROOTDEV, ROOTINO);
         } else {
-            // xv6: ip = idup(myproc()->cwd);
-            ip = idup((*crate::kernel::sched::myproc()).cwd);
+            // xv6: ip = idup(cp->cwd). The cwd pointer lands with the S4d
+            // file table; until then (no process has a cwd) the lookup
+            // fails like fs.c's miss path.
+            let p = crate::proc::proc::myproc();
+            if p.is_null() {
+                return core::ptr::null_mut();
+            }
+            let cwd = (*p).cwd as *mut Inode;
+            if cwd.is_null() {
+                return core::ptr::null_mut();
+            }
+            ip = idup(cwd);
         }
 
         let mut path = path;
@@ -244,6 +255,7 @@ pub unsafe fn namei(path: *const u8) -> *mut Inode {
 ///
 /// # Safety
 /// `path` NUL-terminated.
+#[allow(dead_code)] // S4d: sys_open/create resolve the parent dir
 pub unsafe fn nameiparent(path: *const u8, name: &mut [u8; DIRSIZ]) -> *mut Inode {
     unsafe { namex(path, true, name) }
 }

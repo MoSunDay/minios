@@ -24,7 +24,8 @@ use core::mem::size_of;
 
 /// Read the super block. (fs.c readsb)
 pub fn readsb(dev: u32) -> Superblock {
-    let bp = bread(dev, 1);
+    // SAFETY: bread returns a B_BUSY buffer; released below.
+    let bp = unsafe { bread(dev, 1) };
     let mut sb = Superblock::default();
     // SAFETY: bp->data is a full BSIZE block; we copy sizeof(Superblock)
     // bytes out of it like fs.c's memmove(sb, bp->data, sizeof(*sb)).
@@ -41,7 +42,8 @@ pub fn readsb(dev: u32) -> Superblock {
 
 /// Zero a block. (fs.c bzero)
 pub fn bzero(dev: u32, bno: u32) {
-    let bp = bread(dev, bno);
+    // SAFETY: bread returns a B_BUSY buffer; released below.
+    let bp = unsafe { bread(dev, bno) };
     // SAFETY: bp is B_BUSY from bread; data is BSIZE bytes.
     unsafe {
         (*bp).data.fill(0);
@@ -58,7 +60,8 @@ pub fn balloc(dev: u32) -> u32 {
 
     let mut b: u32 = 0;
     while b < sb.size {
-        let bp = bread(dev, bblock(b, sb.ninodes));
+        // SAFETY: bread returns a B_BUSY buffer; released below.
+        let bp = unsafe { bread(dev, bblock(b, sb.ninodes)) };
         let mut bi: u32 = 0;
         while bi < bpb() && b + bi < sb.size {
             // SAFETY: bp is B_BUSY; index bi/8 is inside bp->data.
@@ -85,7 +88,8 @@ pub fn balloc(dev: u32) -> u32 {
 /// Free a disk block. (fs.c bfree)
 pub fn bfree(dev: u32, b: u32) {
     let sb = readsb(dev);
-    let bp = bread(dev, bblock(b, sb.ninodes));
+    // SAFETY: bread returns a B_BUSY buffer; released below.
+    let bp = unsafe { bread(dev, bblock(b, sb.ninodes)) };
     let bi = b % bpb();
     let m: u8 = 1 << (bi % 8);
     // SAFETY: bp is B_BUSY; bi/8 indexes inside bp->data.

@@ -68,13 +68,14 @@ pub fn finish_driver(status: i32) -> ! {
 pub fn run() -> ! {
     let mut total = 0u8;
     let mut passed = 0u8;
-    let checks: [(&str, fn() -> bool); 6] = [
+    let checks: [(&str, fn() -> bool); 7] = [
         ("m1r.irq.pit", case_irq_pit),
         ("m1r.uaccess.copyin_efault", case_copyin_efault),
         ("m1r.uaccess.copyout_efault", case_copyout_efault),
         ("m1r.uaccess.kernelptr_efault", case_kernelptr_efault),
         ("m1r.ksym.self", case_ksym_self),
         ("m1r.fs.blockread", case_fs_blockread),
+        ("m1r.fs.inode", case_fs_inode),
     ];
     for (case_id, check) in checks {
         total += 1;
@@ -109,19 +110,20 @@ fn run_case(case_id: &str, passed: bool) -> bool {
 /// interrupts and halt until the PIT tick handler ran (trapasm frame
 /// normalization -> traps_dispatch -> time::tick -> iretq) and returned.
 fn case_irq_pit() -> bool {
-    if super::time::ticks() != 0 {
-        return false; // ticks before sti(): a previous IRQ would mask a dead path
-    }
+    // Snapshot semantics: earlier boot code (S4c loginit polls the IDE
+    // disk with sti/hlt before the suite) may already have taken timer
+    // ticks — that delivery proves the very path under test. Waiting for
+    // a NEW edge keeps the case honest: a dead PIT never advances past t0,
+    // hlt never returns, and the runner deadline produces the TIMEOUT
+    // evidence (never a false PASS).
+    let t0 = super::time::ticks();
     // Boot context on the boot stack; the IRQ frame nests below rsp.
     io::sti();
-    // hlt with IF=1 returns only via an interrupt; each wake re-checks.
-    // If the timer never fires, hlt never returns and the runner deadline
-    // produces the TIMEOUT evidence (never a false PASS).
-    while super::time::ticks() == 0 {
+    while super::time::ticks() == t0 {
         io::hlt();
     }
     io::cli();
-    super::time::ticks() > 0
+    super::time::ticks() > t0
 }
 
 /// copyin from an unmapped user VA must return exactly -EFAULT (fixup
@@ -215,6 +217,50 @@ fn case_fs_blockread() -> bool {
         good
     };
     ok
+}
+
+/// S4c inode/namei layer: resolve /m1r-suite and /m1r-exec-child through
+/// namei -> iget -> ilock -> readi and compare the file contents with the
+/// embedded userimg ELFs (the very bytes minios-mkfs packed into the root
+/// image). The suite ELF spans 36 blocks > NDIRECT(12), so readi walks the
+/// indirect-block path through bmap. /enoent must fail like fs.c's miss
+/// path. Read-only by design (40 §2.2 per-round image accounting).
+fn case_fs_inode() -> bool {
+    use crate::fs::xv6fs::inode::{ilock, iunlockput, readi};
+    use crate::fs::xv6fs::layout::T_FILE;
+    use crate::fs::xv6fs::namei::namei;
+
+    let check = |path: &str| -> bool {
+        let Some(img) = super::userimg::lookup(path.as_bytes()) else {
+            return false;
+        };
+        let mut cpath = [0u8; 20];
+        cpath[..path.len()].copy_from_slice(path.as_bytes());
+        // SAFETY: cpath is NUL-terminated; the inode protocol is balanced
+        // (namei -> ilock -> readi -> iunlockput), all under icache locks.
+        let ip = unsafe { namei(cpath.as_ptr()) };
+        if ip.is_null() {
+            return false;
+        }
+        unsafe { ilock(ip) };
+        // SAFETY: ip is I_BUSY; header fields read under the inode lock.
+        let ok = unsafe { (*ip).type_ == T_FILE && (*ip).size as usize == img.len() };
+        let mut buf = [0u8; 64];
+        // Head 64 bytes straight off block 0 of the file.
+        let head = ok && unsafe { readi(ip, buf.as_mut_ptr(), 0, 64) == 64 } && buf == img[..64];
+        // Tail 64 bytes: starts mid-block (size % BSIZE != 0) and crosses
+        // the direct/indirect boundary for a 36-block file.
+        let off = (img.len() - 64) as u32;
+        let tail = head
+            && unsafe { readi(ip, buf.as_mut_ptr(), off, 64) == 64 }
+            && buf == img[off as usize..];
+        unsafe { iunlockput(ip) };
+        tail
+    };
+
+    // SAFETY: NUL-terminated literal.
+    let miss = unsafe { namei(b"/enoent\0".as_ptr()) }.is_null();
+    check("/m1r-suite") && check("/m1r-exec-child") && miss
 }
 
 fn write_decimal(value: u8) {

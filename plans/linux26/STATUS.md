@@ -225,3 +225,26 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   `a37262fa…311a` == 模板）；M0R `028048dd…92f1` 字节不变；m1r-fault
   `9814a6d5…fa2e`（exit 35）；test-host 6 组、fmt、make all 绿。CI：S3
   `7e190a4`/S4a `4291272` 均 success。
+
+2026-11-19 S4c 闭环（xv6fs 日志/ inode/namei 层上线）：
+
+- 死树复活：kernel/src/fs/xv6fs 五文件从旧 i686 树就地移植到 x86_64 习惯——
+  log.rs/inode.rs 的 sched::{acquire,release,sleep,RawLock} 死 API 换成
+  klib::sync::Spinlock<()>（raw_lock/raw_release 对，配 proc::sleep）；log 的
+  static mut LOG 全部经 logp() 原始指针访问；log_write 的 `flags |= B_DIRTY`
+  改 AtomicI32::fetch_or（S4b 原子旗标延续）；readsb/balloc/bfree/bzero 的
+  bread 补 unsafe 块；install_trans 头部拷贝改逐元素（避 implicit autoref）。
+  layout::ROOTDEV 1→0（minios 根盘=IDE index 0，非 xv6 的 hdb）。namei 相对
+  路径分支在 cwd 落地（S4d 文件表）前按 miss 路径返回 null。写路径
+  （balloc/bmap/writei/dirlink/ialloc/stati）与 devsw 以 S4d 标注保留。
+- 引导接线：M1rSuite 臂在 ideinit 后加 log::loginit(ROOTDEV)（读 sb、log 居盘尾
+  size-nlog=994，恢复事务）+ iinit()。m1r.irq.pit 改快照语义——loginit 引导期
+  IDE 轮询（sti/hlt）已合法吃掉首个 tick，用例改为等“新边沿”（死 PIT 仍挂死→
+  超时证据，不弱化）。
+- 套件：新增内核用例 m1r.fs.inode——namei("/m1r-suite")/("/m1r-exec-child") 解
+  析→ilock→readi 头/尾各 64B 与 userimg 内嵌 ELF 逐字节比对（18224B=36 块>12
+  直接块，覆盖 bmap 间接路径），/enoent 必须 miss。清单 15 用例。
+- 证据（verdict: PASS，exit 33）：m1r-suite `d1ebd8c3…087c`（total=15 passed=15，
+  root `a37262fa…311a` == 模板——loginit 恢复重写的头块字节相同，只读性保持）；
+  M0R `028048dd…92f1` 字节不变；m1r-fault exit 35；test-host 6 组（runner 44 例）、
+  fmt、make all 绿。

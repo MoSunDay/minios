@@ -26,6 +26,7 @@ pub fn m1r_suite_spec() -> SuiteSpec {
             "m1r.uaccess.kernelptr_efault",
             "m1r.ksym.self",
             "m1r.fs.blockread",
+            "m1r.fs.inode",
             "m1r.user.write",
             "m1r.user.getpid_fork",
             "m1r.user.fork_wait",

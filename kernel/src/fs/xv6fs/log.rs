@@ -34,7 +34,8 @@
 use crate::fs::buffer::{bread, brelse, bwrite, Buf, B_DIRTY};
 use crate::fs::xv6fs::layout::{BSIZE, LOGSIZE};
 use crate::fs::xv6fs::readsb;
-use crate::kernel::sched::{acquire, release, sleep, wakeup, RawLock};
+use crate::klib::sync::Spinlock;
+use crate::proc::sleep::{sleep, wakeup};
 use core::mem::size_of;
 
 /// Contents of the header block, used for both the on-disk header block and
@@ -55,9 +56,9 @@ impl LogHeader {
     }
 }
 
-/// log.c `struct log`; the lock is a sibling static LOG_LOCK (RawLock is
-/// Sync on its own; Log contains plain data, so it stays `static mut`),
-/// like sched's TICKS/TICKS_LOCK split of xv6's embedded-spinlock structs.
+/// log.c `struct log`; the lock is a sibling static LOG_LOCK (the Spinlock
+/// is Sync on its own; Log contains plain data, so it stays `static mut`),
+/// like the TICKS/TICKS_LOCK split of xv6's embedded-spinlock structs.
 struct Log {
     start: u32,
     size: u32,
@@ -68,7 +69,7 @@ struct Log {
 }
 
 // SAFETY: all fields are guarded by LOG_LOCK; the statics are unique.
-static LOG_LOCK: RawLock = RawLock::new("log");
+static LOG_LOCK: Spinlock<()> = Spinlock::new("log", ());
 static mut LOG: Log = Log {
     start: 0,
     size: 0,
@@ -77,10 +78,25 @@ static mut LOG: Log = Log {
     lh: LogHeader::empty(),
 };
 
-/// Sleeping channel for the log (xv6: `sleep(&log, ...)` on the struct).
-#[allow(static_mut_refs)]
-fn log_chan() -> usize {
-    core::ptr::addr_of!(LOG) as usize
+/// Raw pointer to the in-memory log (xv6: `&log`); also the sleep channel
+/// (`sleep(&log, ...)` sleeps on the struct's address).
+// SAFETY: LOG is a unique static guarded by LOG_LOCK.
+unsafe fn logp() -> *mut Log {
+    core::ptr::addr_of_mut!(LOG)
+}
+
+/// xv6 acquire()/release() spelling over the spinlock primitive (the raw
+/// pair is required: sleep() drops the lock mid-critical-section).
+/// SAFETY: caller must balance each acquire with a release of the same lock.
+#[inline]
+unsafe fn acquire(l: &Spinlock<()>) {
+    l.raw_lock();
+}
+
+/// SAFETY: the lock must be held by this context.
+#[inline]
+unsafe fn release(l: &Spinlock<()>) {
+    l.raw_release();
 }
 
 /// log.c initlog() (minios calls it loginit(dev) in the boot sequence).
@@ -100,9 +116,9 @@ pub fn loginit(dev: u32) {
     // writes and releases before recover_from_log().
     unsafe {
         acquire(&LOG_LOCK);
-        LOG.dev = dev;
-        LOG.start = sb.size - sb.nlog;
-        LOG.size = sb.nlog;
+        (*logp()).dev = dev;
+        (*logp()).start = sb.size - sb.nlog;
+        (*logp()).size = sb.nlog;
         release(&LOG_LOCK);
     }
 
@@ -110,6 +126,7 @@ pub fn loginit(dev: u32) {
 }
 
 /// xv6-faithful spelling of [`loginit`].
+#[allow(dead_code)] // xv6-faithful alias; boot calls loginit()
 pub fn initlog(dev: u32) {
     loginit(dev);
 }
@@ -124,11 +141,13 @@ fn install_trans() {
         // SAFETY: brief critical section copying the header out.
         unsafe {
             acquire(&LOG_LOCK);
-            let dev = LOG.dev;
-            let start = LOG.start;
-            let n = LOG.lh.n;
+            let dev = (*logp()).dev;
+            let start = (*logp()).start;
+            let n = (*logp()).lh.n;
             let mut blocks = [0u32; LOGSIZE];
-            blocks[..n as usize].copy_from_slice(&LOG.lh.block[..n as usize]);
+            for i in 0..n as usize {
+                blocks[i] = (*logp()).lh.block[i];
+            }
             release(&LOG_LOCK);
             (dev, start, n, blocks)
         }
@@ -153,8 +172,8 @@ fn read_head() {
     // SAFETY: brief critical sections bracketing the buffered read.
     unsafe {
         acquire(&LOG_LOCK);
-        let dev = LOG.dev;
-        let start = LOG.start;
+        let dev = (*logp()).dev;
+        let start = (*logp()).start;
         release(&LOG_LOCK);
 
         // bread returns a B_BUSY buffer; the header is read out of the
@@ -164,9 +183,9 @@ fn read_head() {
         let n = (*lh).n.clamp(0, LOGSIZE as i32);
 
         acquire(&LOG_LOCK);
-        LOG.lh.n = n;
+        (*logp()).lh.n = n;
         for i in 0..n as usize {
-            LOG.lh.block[i] = (*lh).block[i];
+            (*logp()).lh.block[i] = (*lh).block[i];
         }
         release(&LOG_LOCK);
 
@@ -180,17 +199,17 @@ fn write_head() {
     // SAFETY: buf is B_BUSY; hb aliases buf->data while the block is held.
     unsafe {
         acquire(&LOG_LOCK);
-        let dev = LOG.dev;
-        let start = LOG.start;
+        let dev = (*logp()).dev;
+        let start = (*logp()).start;
         release(&LOG_LOCK);
 
         let buf = bread(dev, start);
         let hb = (*buf).data.as_mut_ptr() as *mut LogHeader;
 
         acquire(&LOG_LOCK);
-        let n = LOG.lh.n;
+        let n = (*logp()).lh.n;
         for i in 0..n as usize {
-            (*hb).block[i] = LOG.lh.block[i];
+            (*hb).block[i] = (*logp()).lh.block[i];
         }
         release(&LOG_LOCK);
 
@@ -202,17 +221,18 @@ fn write_head() {
 
 /// Commit a transaction: write the header to disk (the real commit point),
 /// install the logged blocks, then erase the log. (log.c commit)
+#[allow(dead_code)] // S4d: reached through end_op() once writes exist
 fn commit() {
     // SAFETY: log.lock only guards the lh.n checks/updates here.
     unsafe {
         acquire(&LOG_LOCK);
-        let has_work = LOG.lh.n > 0;
+        let has_work = (*logp()).lh.n > 0;
         release(&LOG_LOCK);
         if has_work {
             write_head(); // Write header to disk -- the real commit
             install_trans(); // Now install writes to home locations
             acquire(&LOG_LOCK);
-            LOG.lh.n = 0;
+            (*logp()).lh.n = 0;
             release(&LOG_LOCK);
             write_head(); // Erase the transaction from the log
         }
@@ -225,7 +245,7 @@ fn recover_from_log() {
                      // SAFETY: erase the recovered header like log.c recover_from_log().
     unsafe {
         acquire(&LOG_LOCK);
-        LOG.lh.n = 0;
+        (*logp()).lh.n = 0;
         release(&LOG_LOCK);
     }
     write_head(); // clear the log
@@ -233,28 +253,30 @@ fn recover_from_log() {
 
 /// Called at the start of each FS system call that writes the file system.
 /// (log.c begin_op, later xv6 revision)
+#[allow(dead_code)] // S4d: file syscalls wrap their writes in a transaction
 pub fn begin_op() {
     // SAFETY: sleep() releases log.lock while waiting and re-acquires it
     // before returning; loop mirrors log.c's begin_trans().
     unsafe {
         acquire(&LOG_LOCK);
-        while LOG.busy {
-            sleep(log_chan(), &LOG_LOCK);
+        while (*logp()).busy {
+            sleep(logp() as usize, &LOG_LOCK);
         }
-        LOG.busy = true;
+        (*logp()).busy = true;
         release(&LOG_LOCK);
     }
 }
 
 /// Commit the active transaction and release the log to other writers.
 /// (log.c end_trans/commit_trans)
+#[allow(dead_code)] // S4d: file syscalls wrap their writes in a transaction
 pub fn end_op() {
     commit();
     // SAFETY: wake writers waiting in begin_op().
     unsafe {
         acquire(&LOG_LOCK);
-        LOG.busy = false;
-        wakeup(log_chan());
+        (*logp()).busy = false;
+        wakeup(logp() as usize);
         release(&LOG_LOCK);
     }
 }
@@ -285,21 +307,21 @@ pub unsafe fn log_write(b: *mut Buf) {
         // SAFETY: brief critical section for the absorption scan.
         unsafe {
             acquire(&LOG_LOCK);
-            if !LOG.busy {
+            if !(*logp()).busy {
                 panic!("log_write outside of op");
             }
-            if LOG.lh.n >= LOGSIZE as i32 || LOG.lh.n >= LOG.size as i32 - 1 {
+            if (*logp()).lh.n >= LOGSIZE as i32 || (*logp()).lh.n >= (*logp()).size as i32 - 1 {
                 panic!("too big a transaction");
             }
             let mut i: usize = 0;
-            while i < LOG.lh.n as usize {
-                if LOG.lh.block[i] == sector {
+            while i < (*logp()).lh.n as usize {
+                if (*logp()).lh.block[i] == sector {
                     break;
                 }
                 i += 1;
             }
-            LOG.lh.block[i] = sector;
-            let r = (i, LOG.start, LOG.lh.n);
+            (*logp()).lh.block[i] = sector;
+            let r = (i, (*logp()).start, (*logp()).lh.n);
             release(&LOG_LOCK);
             r
         }
@@ -317,9 +339,12 @@ pub unsafe fn log_write(b: *mut Buf) {
         // SAFETY: brief critical section bumping the header count.
         unsafe {
             acquire(&LOG_LOCK);
-            LOG.lh.n += 1;
+            (*logp()).lh.n += 1;
             release(&LOG_LOCK);
         }
     }
-    (*b).flags |= B_DIRTY; // XXX prevent eviction
+    // Mark dirty so the buffer is not evicted before the transaction
+    // installs it (xv6: b->flags |= B_DIRTY).
+    (*b).flags
+        .fetch_or(B_DIRTY, core::sync::atomic::Ordering::Relaxed);
 }
