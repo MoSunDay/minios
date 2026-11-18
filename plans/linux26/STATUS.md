@@ -347,3 +347,26 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   （total=35 passed=35 failed=0，35 个 CASE id 唯一）、root `a5a140d6…c947`；
   m1r-suite `6137aefd…e585` 字节不变、M0R `028048dd…92f1` 字节不变（证明 6 处
   内核修改不扰动既有两套）；test-host 47 例、fmt、make all（user-build 0 警告）绿。
+
+2026-11-19 S4e-3 闭环（用户覆盖矩阵 coverage.toml + runner 派生门禁）：
+
+- 输入清单 tests/user/coverage.toml（394 行，39 条）：35 条 M1R 到期 required
+  （21 条 usertests 源 `xv6@2305a8c:usertests:*`，sbrk 标注 subset；12 条程序源
+  `xv6@2305a8c:<prog>.c`）+ 4 条未来项（mmap/munmap/cow→M2、sigpipe→M3）——仅静态
+  字段（case_id/source/milestone/config/mode/runner_test_name/requirement/adr）。
+- runner 新增 coverage 模块（mod 343 行 + tests 91 行，零依赖）：TOML 子集解析
+  （未知字段/重复/坏枚举/缺字段均硬错）、按里程碑推导 activation（M0R<M1R<M2…
+  <M13）、evidence 仅绑定 active 用例（not-active 有结果即 fail）、手写 JSON 渲染
+  派生结果文件 results/<run>/<CONFIG>.json（拒绝覆盖既有证据）。
+- 门禁规则（40 §3.1）：active+required 为空、到期 required 缺结果/非 PASS、结果
+  匹配不到清单用例均 fail；m1r-user 轮后 Makefile 链式执行，gate fail 即 make 失败。
+  完整性交叉校验：清单 M1R 集 ≡ m1r_user_spec() 35 例（防漂移）。verdict 新增
+  case_results()（复用 judge 的 CR 修剪语义）供 evidence 派生。
+- 证据：m1r-user 35/35 exit 33 + `coverage: PASS run=m1r-user active=35
+  not-active=4`；serial `0c39a3e5…08d3` / root `a5a140d6…c947` 与 S4e-2 完全一致
+  （门禁纯 host 侧）；m1r-suite `6137aefd…e585`、M0R `028048dd…92f1` 字节不变；
+  test-host 6 组（runner 51 例，含 coverage 门禁 4 例）、fmt、make all 绿。
+- 备注：S4e-2 推送（33340a0）CI 失败于 snapshot.ubuntu.com 全站 401（外部事故，
+  与仓库无关，snapshot 步骤早于任何构建）；本阶段推送即重触发，main tip 覆盖
+  S4e-2+S4e-3 两阶段内容。check-rust-only 与遗留 C 删除一并入 S4e-4（先删后启，
+  保持每提交可绿）。

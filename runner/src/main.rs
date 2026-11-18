@@ -4,6 +4,7 @@
 //! suites use CORE-UP-GRUB-R1, appending the frozen raw-IDE root drive
 //! (40 §1.2); both M1R invocations are identical except the -cdrom image.
 
+mod coverage;
 mod elfcheck;
 mod userelf;
 mod verdict;
@@ -27,6 +28,7 @@ fn main() {
         Some("run-m1r-suite") => cmd_run_suite(Suite::M1rSuite, "run-m1r-suite", &args[1..]),
         Some("run-m1r-user") => cmd_run_suite(Suite::M1rUser, "run-m1r-user", &args[1..]),
         Some("run-m1r-fault") => cmd_run_suite(Suite::M1rFault, "run-m1r-fault", &args[1..]),
+        Some("coverage") => cmd_coverage(&args[1..]),
         _ => {
             eprintln!(
                 "usage: minios-runner <command>\n\
@@ -34,7 +36,9 @@ fn main() {
                  \x20 run-smoke --iso <iso> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-suite --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-user --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
-                 \x20 run-m1r-fault --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]"
+                 \x20 run-m1r-fault --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
+                 \x20 coverage --manifest <coverage.toml> --serial <serial.log> --suite m1r-user\n\
+                 \x20           --run <run-id> --config <CONFIG-ID> --milestone <MxR>"
             );
             2
         }
@@ -323,6 +327,130 @@ fn cmd_run_suite(suite: Suite, cmd: &str, args: &[String]) -> i32 {
         Err(reasons) => {
             for r in &reasons {
                 eprintln!("verdict: FAIL {r}");
+            }
+            1
+        }
+    }
+}
+
+/// Coverage gate round (40 §3.1, 04 §4): join the static manifest with
+/// this round's per-case results, write the derived results file, gate.
+/// Runs after `run-m1r-user` (its verdict must already be PASS); the
+/// serial log is re-parsed for per-case evidence only.
+fn cmd_coverage(args: &[String]) -> i32 {
+    let mut manifest: Option<PathBuf> = None;
+    let mut serial: Option<PathBuf> = None;
+    let mut run: Option<String> = None;
+    let mut config: Option<String> = None;
+    let mut milestone: Option<String> = None;
+    let mut suite: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let take_value = |i: &mut usize| -> Option<String> {
+            *i += 1;
+            args.get(*i).cloned()
+        };
+        match args[i].as_str() {
+            "--manifest" => manifest = take_value(&mut i).map(PathBuf::from),
+            "--serial" => serial = take_value(&mut i).map(PathBuf::from),
+            "--run" => run = take_value(&mut i),
+            "--config" => config = take_value(&mut i),
+            "--milestone" => milestone = take_value(&mut i),
+            "--suite" => suite = take_value(&mut i),
+            other => {
+                eprintln!("coverage: unknown arg {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+    let (Some(manifest), Some(serial), Some(run), Some(config), Some(milestone), Some(suite)) =
+        (manifest, serial, run, config, milestone, suite)
+    else {
+        eprintln!("coverage: --manifest/--serial/--run/--config/--milestone/--suite required");
+        return 2;
+    };
+    if suite != "m1r-user" {
+        eprintln!("coverage: unsupported suite {suite} (m1r-user only)");
+        return 2;
+    }
+    if coverage::milestone_rank(&milestone).is_none() {
+        eprintln!("coverage: bad milestone {milestone}");
+        return 2;
+    }
+    let text = match std::fs::read_to_string(&manifest) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("coverage: cannot read {}: {e}", manifest.display());
+            return 2;
+        }
+    };
+    let specs = match coverage::parse_manifest(&text) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("coverage: manifest parse error: {e}");
+            return 1;
+        }
+    };
+    // Manifest/spec integrity: the manifest's M1R m1r-user entries must be
+    // exactly the frozen battery in m1r_user_spec() (no silent drift).
+    let spec_set: std::collections::BTreeSet<&str> = verdict::m1r_user_spec()
+        .expected_cases
+        .iter()
+        .copied()
+        .collect();
+    let manifest_due: std::collections::BTreeSet<&str> = specs
+        .iter()
+        .filter(|c| c.milestone == "M1R")
+        .map(|c| c.case_id.as_str())
+        .collect();
+    if spec_set != manifest_due {
+        eprintln!("coverage: manifest M1R set != m1r_user_spec battery (drift)");
+        return 1;
+    }
+    let log = match std::fs::read_to_string(&serial) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("coverage: cannot read {}: {e}", serial.display());
+            return 2;
+        }
+    };
+    let results = verdict::case_results(&log);
+    let (derived, derrs) = coverage::derive(&specs, &milestone, &run, &config, &results);
+    let json = coverage::render_json(&run, &config, &milestone, &derived);
+    let out_path = PathBuf::from("results")
+        .join(&run)
+        .join(format!("{config}.json"));
+    if let Some(dir) = out_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("coverage: cannot create {}: {e}", dir.display());
+            return 2;
+        }
+    }
+    if out_path.exists() {
+        eprintln!(
+            "coverage: refusing to overwrite {}: clean the run dir first",
+            out_path.display()
+        );
+        return 2;
+    }
+    if let Err(e) = std::fs::write(&out_path, json) {
+        eprintln!("coverage: cannot write {}: {e}", out_path.display());
+        return 2;
+    }
+    let active = derived.iter().filter(|c| c.activation == "active").count();
+    let not_active = derived.len() - active;
+    match coverage::gate(&derived, &derrs) {
+        Ok(()) => {
+            println!(
+                "coverage: PASS run={run} config_id={config} active={active} not-active={not_active} results={}",
+                out_path.display()
+            );
+            0
+        }
+        Err(errs) => {
+            for e in &errs {
+                eprintln!("coverage: FAIL {e}");
             }
             1
         }

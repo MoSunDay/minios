@@ -14,3 +14,6 @@
 /tools/mkfs
 /user/_*
 link_repos
+
+# coverage gate derived results (per-round generated evidence)
+/results

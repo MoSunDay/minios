@@ -12,6 +12,28 @@ pub use m1r::{
     judge_fault, m1r_fault_spec, m1r_suite_spec, m1r_user_spec, EXPECTED_FAULT_EXIT_CODE,
 };
 
+/// Per-case `(case_id, status)` pairs from `CASE <id> <STATUS>` protocol
+/// lines, for coverage evidence derivation. The suite judge remains the
+/// verdict authority (duplicate/malformed handling lives there); coverage
+/// runs only after a PASS verdict, on the same serial log.
+pub fn case_results(log: &str) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for raw in log.lines() {
+        // Same CR trim as the judge: GRUB's banner leaves a leading CR.
+        let line = raw.trim_matches(['\r']);
+        let Some(rest) = line.strip_prefix("CASE ") else {
+            continue;
+        };
+        let mut it = rest.split_whitespace();
+        if let (Some(id), Some(status)) = (it.next(), it.next()) {
+            if it.next().is_none() {
+                out.insert(id.to_string(), status.to_string());
+            }
+        }
+    }
+    out
+}
+
 pub const MARKER_PREFIX: &str = "MINIOS_X86_64_TEST_";
 pub const MARKER_PASS: &str = "MINIOS_X86_64_TEST_PASS_V1";
 pub const MARKER_FAIL: &str = "MINIOS_X86_64_TEST_FAIL_V1";

@@ -158,11 +158,13 @@ test-qemu: m1r-iso $(ROOT_TEMPLATE)
 
 # M1R user-mode suite (S4e-2): the xv6 usertests port as pid 1.
 test-qemu-user: m1r-user-iso $(ROOT_TEMPLATE)
-	@rm -rf $(M1R_USER_RUN)
+	@rm -rf $(M1R_USER_RUN) results/m1r-user
 	@mkdir -p $(M1R_USER_RUN)
 	@cp $(ROOT_TEMPLATE) $(M1R_USER_RUN)/root.raw
 	$(RUNNER) run-m1r-user --iso $(M1R_USER_ISO) --root $(M1R_USER_RUN)/root.raw --work-dir $(M1R_USER_RUN)
 	@sha256sum $(M1R_USER_RUN)/serial.log $(M1R_USER_RUN)/root.raw
+	$(RUNNER) coverage --manifest tests/user/coverage.toml --serial $(M1R_USER_RUN)/serial.log \
+	  --suite m1r-user --run m1r-user --config CORE-UP-GRUB-R1 --milestone M1R
 
 # M1R expected-fault suite: dedicated log namespace + verdict (40 §2.1.6);
 # argv identical to test-qemu except the -cdrom image (construction

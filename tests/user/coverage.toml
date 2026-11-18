@@ -1,0 +1,394 @@
+# M1R user-program coverage matrix (plans/linux26 04 §4, 40 §3.1).
+# Static fields ONLY — the runner derives activation/evidence into
+# results/<run>/<CONFIG>.json and never writes this file back.
+# Future items stay listed with later milestones (not-active now).
+
+[[cases]]
+case_id = "xv6.mem.bsstest"
+source = "xv6@2305a8c:usertests:bsstest"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.mem.bsstest"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.mem.sbrk"
+source = "xv6@2305a8c:usertests:sbrktest-subset"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.mem.sbrk"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.opentest"
+source = "xv6@2305a8c:usertests:opentest"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.opentest"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.writetest"
+source = "xv6@2305a8c:usertests:writetest"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.writetest"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.writetest1"
+source = "xv6@2305a8c:usertests:writetest1"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.writetest1"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.createtest"
+source = "xv6@2305a8c:usertests:createtest"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.createtest"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.ipc.pipe1"
+source = "xv6@2305a8c:usertests:pipe1"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.ipc.pipe1"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.ipc.preempt"
+source = "xv6@2305a8c:usertests:preempt"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.ipc.preempt"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.ipc.exitwait"
+source = "xv6@2305a8c:usertests:exitwait"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.ipc.exitwait"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.rmdot"
+source = "xv6@2305a8c:usertests:rmdot"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.rmdot"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.fourteen"
+source = "xv6@2305a8c:usertests:fourteen"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.fourteen"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.bigwrite"
+source = "xv6@2305a8c:usertests:bigwrite"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.bigwrite"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.bigfile"
+source = "xv6@2305a8c:usertests:bigfile"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.bigfile"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.subdir"
+source = "xv6@2305a8c:usertests:subdir"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.subdir"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.linkunlink"
+source = "xv6@2305a8c:usertests:linkunlink"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.linkunlink"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.linktest"
+source = "xv6@2305a8c:usertests:linktest"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.linktest"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.unlinkread"
+source = "xv6@2305a8c:usertests:unlinkread"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.unlinkread"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.createdelete"
+source = "xv6@2305a8c:usertests:createdelete"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.createdelete"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.twofiles"
+source = "xv6@2305a8c:usertests:twofiles"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.twofiles"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.sharedfd"
+source = "xv6@2305a8c:usertests:sharedfd"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.sharedfd"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.dirfile"
+source = "xv6@2305a8c:usertests:dirfile"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.dirfile"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.fs.bigdir"
+source = "xv6@2305a8c:usertests:bigdir"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.fs.bigdir"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.exec.exectest"
+source = "xv6@2305a8c:usertests:exectest"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.exec.exectest"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.echo"
+source = "xv6@2305a8c:echo.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.echo"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.cat"
+source = "xv6@2305a8c:cat.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.cat"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.grep"
+source = "xv6@2305a8c:grep.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.grep"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.wc"
+source = "xv6@2305a8c:wc.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.wc"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.ls"
+source = "xv6@2305a8c:ls.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.ls"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.mkdir"
+source = "xv6@2305a8c:mkdir.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.mkdir"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.rm"
+source = "xv6@2305a8c:rm.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.rm"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.ln"
+source = "xv6@2305a8c:ln.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.ln"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.kill"
+source = "xv6@2305a8c:kill.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.kill"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.zombie"
+source = "xv6@2305a8c:zombie.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.zombie"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.forktest"
+source = "xv6@2305a8c:forktest.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.forktest"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.prog.stressfs"
+source = "xv6@2305a8c:stressfs.c"
+milestone = "M1R"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.prog.stressfs"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.mem.mmap"
+source = "new:mmap-anon-basic"
+milestone = "M2"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.mem.mmap"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.mem.munmap"
+source = "new:munmap-basic"
+milestone = "M2"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.mem.munmap"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.mem.cow"
+source = "new:cow-fork-page"
+milestone = "M2"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.mem.cow"
+requirement = "required"
+adr = ""
+
+[[cases]]
+case_id = "xv6.ipc.sigpipe"
+source = "new:sigpipe-default"
+milestone = "M3"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.ipc.sigpipe"
+requirement = "required"
+adr = ""
