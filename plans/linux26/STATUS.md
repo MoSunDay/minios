@@ -203,3 +203,25 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
 - 证据（verdict: PASS，exit 33）：m1r-suite `4d08bbf5…cacbe`（total=13 passed=13，
   root `30e14955…cb58`）；M0R `028048dd…92f1`；m1r-fault `5aa34926…7af2`
   （exit 35）；make test-host 58 例、fmt-check、make all 全绿。
+
+2026-11-19 S4a/S4b 闭环（mkfs + 块层上线）：
+
+- S4a Rust mkfs（minios-tools）：tools/ 恢复为 Rust host crate（bin minios-mkfs +
+  纯函数引擎 build_image），与 C tools/mkfs.c 在相同输入下**逐字节一致**（实证
+  cmp 通过）；根模板从 1MiB 零盘换成真实 xv6 root（1024 块、嵌 m1r-suite/
+  m1r-exec-child 两个用户 ELF）。引擎单测 5 例（几何铺盘/位图/间接块/确定性/
+  超长名拒绝）进 test-host。
+- S4b 内核块层：fs/buffer.rs（bio.c 移植：BCACHE 单锁 + BUSY/VALID/DIRTY 旗标
+  + LRU 链，bget 睡后重扫）与 drivers/block/ide.rs（ide.c PIO 移植，偏差记录：
+  minios 根盘=drive 0，非 xv6 的 disk1；idewait 有界自旋防仿真卡死；引导期无
+  进程上下文时 iderw 用 sti/hlt 轮询代替 sleep）。x86_64 io 补 insl/outsl。
+- 两个真实 bug 修复：①PIC 级联——pic::init 全掩码后 slave 线（8..15）永远到不了
+  CPU，unmask 现在同时开 master line2（-d int + pic trace 定位）；②Buf.flags
+  非原子读被 LTO 提升出轮询循环——中断写了内存但循环不重读，改 AtomicI32(Relaxed)
+  （x86 TSO 下仅编译器屏障需求）。
+- 套件：新增内核用例 m1r.fs.blockread（bread 读 superblock/root dinode/首块
+  dirent 并逐字段核对，只读——root.raw sha 与模板一致即证据）。清单 14 用例。
+- 证据（verdict: PASS，exit 33）：m1r-suite `b4d6fb39…12a9`（total=14，root
+  `a37262fa…311a` == 模板）；M0R `028048dd…92f1` 字节不变；m1r-fault
+  `9814a6d5…fa2e`（exit 35）；test-host 6 组、fmt、make all 绿。CI：S3
+  `7e190a4`/S4a `4291272` 均 success。

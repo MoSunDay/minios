@@ -30,15 +30,18 @@ pub fn init() {
     io::out8(PIC2_DATA, 0xFF);
 }
 
-/// Unmask one IRQ line (0..15).
+/// Unmask one IRQ line (0..15). Slave lines (8..15) also open the
+/// cascade (master line 2): a slave IRQ reaches the CPU only through it.
 pub fn unmask(irq: u8) {
     // SAFETY: mask register access.
     if irq < 8 {
         let m = io::in8(PIC1_DATA) & !(1 << irq);
         io::out8(PIC1_DATA, m);
     } else {
-        let m = io::in8(PIC2_DATA) & !(1 << (irq - 8));
-        io::out8(PIC2_DATA, m);
+        let m1 = io::in8(PIC1_DATA) & !(1 << 2);
+        io::out8(PIC1_DATA, m1);
+        let m2 = io::in8(PIC2_DATA) & !(1 << (irq - 8));
+        io::out8(PIC2_DATA, m2);
     }
 }
 

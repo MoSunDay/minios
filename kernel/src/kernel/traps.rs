@@ -180,6 +180,7 @@ fn fixup_or_oops(tf: &mut Trapframe, why: &str) {
 pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
     match tf.vector {
         IRQ_TIMER => super::time::tick(tf),
+        IRQ_IDE => crate::drivers::block::ide::ideintr(),
         IRQ_SPURIOUS | IRQ_ERROR => {}
         v if v >= IRQ_BASE && v < IRQ_BASE + 16 => {
             // Spurious/unhandled PIC lines: acknowledge conservatively.

@@ -11,9 +11,10 @@ pub use fault::judge_fault;
 
 use super::SuiteSpec;
 
-/// m1r-suite v1 (decision D-2): kernel-mode cases plus the S3 user-phase
-/// cases (plans/linux26 04 §5: user runtime fork/exec/brk/SSE/regs), all
-/// merged into one driver marker, PASS exit 33.
+/// m1r-suite v1 (decision D-2): kernel-mode cases (trap runtime, uaccess,
+/// ksym, S4 block layer), the S4 fs cases, and the S3 user-phase cases
+/// (plans/linux26 04 §5: user runtime fork/exec/brk/SSE/regs), all merged
+/// into one driver marker, PASS exit 33.
 pub fn m1r_suite_spec() -> SuiteSpec {
     SuiteSpec {
         suite: "m1r",
@@ -24,6 +25,7 @@ pub fn m1r_suite_spec() -> SuiteSpec {
             "m1r.uaccess.copyout_efault",
             "m1r.uaccess.kernelptr_efault",
             "m1r.ksym.self",
+            "m1r.fs.blockread",
             "m1r.user.write",
             "m1r.user.getpid_fork",
             "m1r.user.fork_wait",

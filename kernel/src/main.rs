@@ -9,6 +9,7 @@
 mod arch;
 mod console;
 mod drivers;
+mod fs;
 mod kernel;
 #[path = "lib/mod.rs"]
 mod klib;
@@ -78,9 +79,12 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
             ksymtab::set_active_suite("m1r-fault");
             kernel::faultsuite::run();
         }
-        // Kernel-mode suite: CPL0 interrupt path, UserPtr fixup, ksym.
+        // Kernel-mode suite: CPL0 interrupt path, UserPtr fixup, ksym,
+        // and (S4) the block layer against the mkfs root image.
         BootMode::M1rSuite => {
             ksymtab::set_active_suite("m1r");
+            fs::buffer::binit();
+            drivers::block::ide::ideinit();
             kernel::suite::run();
         }
         BootMode::Full => {

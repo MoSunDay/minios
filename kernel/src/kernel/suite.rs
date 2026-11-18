@@ -68,12 +68,13 @@ pub fn finish_driver(status: i32) -> ! {
 pub fn run() -> ! {
     let mut total = 0u8;
     let mut passed = 0u8;
-    let checks: [(&str, fn() -> bool); 5] = [
+    let checks: [(&str, fn() -> bool); 6] = [
         ("m1r.irq.pit", case_irq_pit),
         ("m1r.uaccess.copyin_efault", case_copyin_efault),
         ("m1r.uaccess.copyout_efault", case_copyout_efault),
         ("m1r.uaccess.kernelptr_efault", case_kernelptr_efault),
         ("m1r.ksym.self", case_ksym_self),
+        ("m1r.fs.blockread", case_fs_blockread),
     ];
     for (case_id, check) in checks {
         total += 1;
@@ -164,6 +165,56 @@ fn case_ksym_self() -> bool {
     // SAFETY: bytes come from the generated ASCII symbol table.
     let sym = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
     exact && sym.starts_with("_copyin_bytes+0x")
+}
+
+/// S4 block layer: read the mkfs root image through bread/bcache+IDE
+/// and verify the on-disk superblock and root dinode byte-for-byte
+/// (tools/fs.h layout; values frozen by minios-tools geometry). Read-only
+/// by design: the suite round's root.raw must stay byte-identical to the
+/// template (40 §2.2 per-round image accounting).
+fn case_fs_blockread() -> bool {
+    use crate::fs::buffer::{bread, brelse};
+    use crate::fs::BSIZE;
+    const IPB: usize = BSIZE / 64; // dinode = 64 bytes (tools/fs.h)
+    const T_DIR: u16 = 1;
+    let ok = unsafe {
+        // Superblock: block 1, six u32 fields little-endian.
+        let sb = bread(0, 1);
+        let u32at = |o: usize| -> u32 {
+            let d: &[u8; BSIZE] = &(*sb).data;
+            u32::from_le_bytes(d[o..o + 4].try_into().unwrap())
+        };
+        let mut good = (
+            u32at(0),
+            u32at(4),
+            u32at(8),
+            u32at(12),
+            u32at(16),
+            u32at(20),
+        ) == (1024, 965, 200, 30, 2, 28);
+        brelse(sb);
+        // Root dinode: inum 1 lives in inode block 2, slot 1.
+        let ib = bread(0, 2);
+        let base = 1 % IPB; // inum 1 slot within inode block 2
+        let d: &[u8; BSIZE] = &(*ib).data;
+        let b = base * 64;
+        let type_ = u16::from_le_bytes(d[b..b + 2].try_into().unwrap());
+        let size = u32::from_le_bytes(d[b + 8..b + 12].try_into().unwrap());
+        let addr0 = u32::from_le_bytes(d[b + 12..b + 16].try_into().unwrap());
+        // Root directory: 4 entries (., .., m1r-suite, m1r-exec-child),
+        // rounded to one block; first data block = 29.
+        good = good && type_ == T_DIR && size == 512 && addr0 == 29;
+        brelse(ib);
+        // First dirent pair sanity straight off the data block.
+        let db = bread(0, 29);
+        let d: &[u8; BSIZE] = &(*db).data;
+        let dot_inum = u16::from_le_bytes(d[0..2].try_into().unwrap());
+        let name_ok = d[2] == b'.';
+        good = good && dot_inum == 1 && name_ok;
+        brelse(db);
+        good
+    };
+    ok
 }
 
 fn write_decimal(value: u8) {

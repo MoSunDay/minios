@@ -150,3 +150,26 @@ pub fn invlpg(addr: u64) {
         core::arch::asm!("invlpg (%rax)", in("rax") addr, options(att_syntax, preserves_flags, nomem, nostack))
     };
 }
+
+/// Read `count` u32 words from an I/O port into memory (xv6 insl). A loop
+/// of `in32` rather than `rep insl`: identical PIO semantics without
+/// inline-asm direction-flag hazards.
+pub fn insl(port: u16, dst: *mut u32, count: usize) {
+    let mut i = 0;
+    while i < count {
+        // SAFETY: the caller guarantees `dst` covers `count` writable words.
+        unsafe { dst.add(i).write_volatile(in32(port)) };
+        i += 1;
+    }
+}
+
+/// Write `count` u32 words from memory to an I/O port (xv6 outsl).
+pub fn outsl(port: u16, src: *const u32, count: usize) {
+    let mut i = 0;
+    while i < count {
+        // SAFETY: the caller guarantees `src` covers `count` readable words.
+        let word = unsafe { src.add(i).read_volatile() };
+        out32(port, word);
+        i += 1;
+    }
+}
