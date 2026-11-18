@@ -31,22 +31,53 @@ pub struct RunOutcome {
     pub timed_out: bool,
 }
 
-/// Judge one run. `Ok(())` is green; `Err(reasons)` lists every violation.
-pub fn judge(spec: &SuiteSpec, outcome: &RunOutcome) -> Result<(), Vec<String>> {
-    let mut errs: Vec<String> = Vec::new();
-
+/// Shared outcome precheck for both judges: timeout, exit-code mismatch,
+/// missing exit code, empty serial log (single source for the literals).
+pub(super) fn base_outcome_errs(outcome: &RunOutcome, expected_exit: i32) -> Vec<String> {
+    let mut errs = Vec::new();
     if outcome.timed_out {
         errs.push("timeout: suite deadline exceeded before QEMU exit".to_string());
     }
     match outcome.exit_code {
-        Some(EXPECTED_EXIT_CODE) => {}
-        Some(code) => errs.push(format!("exit code {code} != {EXPECTED_EXIT_CODE}")),
+        Some(code) if code == expected_exit => {}
+        Some(code) => errs.push(format!("exit code {code} != {expected_exit}")),
         None => errs.push("no QEMU exit code (killed or unreaped)".to_string()),
     }
+    if outcome.serial_log.trim().is_empty() {
+        errs.push("empty serial log".to_string());
+    }
+    errs
+}
 
+/// Shared red scan: any non-pass protocol marker, plus FAIL/FATAL/panic
+/// content on non-protocol lines. CASE and M1RFault lines belong to their
+/// own judges and are exempt here.
+pub(super) fn scan_forbidden(log: &str) -> Vec<String> {
+    let mut errs = Vec::new();
+    for raw in log.lines() {
+        // GRUB's banner ends LF+CR, leaving a leading CR on the next line.
+        let line = raw.trim_matches(['\r']);
+        if line.starts_with(MARKER_PREFIX) {
+            if !line.starts_with(MARKER_PASS) {
+                errs.push(format!("non-pass marker in log: {line}"));
+            }
+        } else if !line.starts_with("CASE ") && !line.starts_with("M1RFault ") {
+            if line.contains(MARKER_FAIL)
+                || line.contains(MARKER_FATAL)
+                || line.to_ascii_lowercase().contains("panic")
+            {
+                errs.push(format!("fatal/fail/panic in log: {line}"));
+            }
+        }
+    }
+    errs
+}
+
+/// Judge one run. `Ok(())` is green; `Err(reasons)` lists every violation.
+pub fn judge(spec: &SuiteSpec, outcome: &RunOutcome) -> Result<(), Vec<String>> {
+    let mut errs = base_outcome_errs(outcome, EXPECTED_EXIT_CODE);
     let log = outcome.serial_log.as_str();
     if log.trim().is_empty() {
-        errs.push("empty serial log".to_string());
         return Err(errs);
     }
 
@@ -75,23 +106,14 @@ pub fn judge(spec: &SuiteSpec, outcome: &RunOutcome) -> Result<(), Vec<String>> 
             }
             continue;
         }
-        if !line.starts_with(MARKER_PREFIX) {
-            if line.contains(MARKER_FAIL)
-                || line.contains(MARKER_FATAL)
-                || line.to_ascii_lowercase().contains("panic")
-            {
-                errs.push(format!("fatal/fail/panic in log: {line}"));
-            }
-            continue;
-        }
         if line.starts_with(MARKER_PASS) {
             pass_markers += 1;
             marker_line_no = idx;
             marker_fields = Some(parse_kv(&line[MARKER_PASS.len()..]));
-        } else if line.starts_with(MARKER_FAIL) || line.starts_with(MARKER_FATAL) {
-            errs.push(format!("non-pass marker in log: {line}"));
         }
     }
+    // Shared red scan owns non-pass markers and fatal/fail/panic content.
+    errs.extend(scan_forbidden(log));
 
     if pass_markers == 0 {
         errs.push(format!("missing {MARKER_PASS} marker"));

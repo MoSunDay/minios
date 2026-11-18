@@ -2,7 +2,9 @@
 //! boot context — no user ELF — and exercises the real trap runtime:
 //! the CPL0 interrupt path (first timer tick through frame normalization
 //! and iretq), UserPtr fixup on unmapped user memory, and the runtime
-//! symbol table. Output reuses the frozen M0R CASE protocol; the final
+//! symbol table, and the USER_TOP preflight that rejects kernel-half
+//! pointers before any byte moves. Output reuses the frozen M0R CASE
+//! protocol; the final
 //! PASS marker exits 0x10 -> QEMU 33.
 
 use super::ksyms;
@@ -25,10 +27,11 @@ unsafe extern "C" {
 pub fn run() -> ! {
     let mut total = 0u8;
     let mut passed = 0u8;
-    let checks: [(&str, fn() -> bool); 4] = [
+    let checks: [(&str, fn() -> bool); 5] = [
         ("m1r.irq.pit", case_irq_pit),
         ("m1r.uaccess.copyin_efault", case_copyin_efault),
         ("m1r.uaccess.copyout_efault", case_copyout_efault),
+        ("m1r.uaccess.kernelptr_efault", case_kernelptr_efault),
         ("m1r.ksym.self", case_ksym_self),
     ];
     for (case_id, check) in checks {
@@ -93,6 +96,17 @@ fn case_copyin_efault() -> bool {
 fn case_copyout_efault() -> bool {
     let kbuf = [0u8; 16];
     uaccess::copyout((USER_UNMAPPED_VA + 0x1000) as *mut u8, kbuf.as_ptr(), 8) == uaccess::EFAULT
+}
+
+/// Kernel-half pointers must be rejected by the USER_TOP preflight
+/// before any byte moves: neither a copyin from kernel memory nor a
+/// copyout into it may touch the target (22 §6).
+fn case_kernelptr_efault() -> bool {
+    let mut kbuf = [0u8; 8];
+    // SAFETY: taking the address of a kernel static.
+    let kva = core::ptr::addr_of!(traps::m1r_force_iret) as usize as *const u8;
+    uaccess::copyin(kbuf.as_mut_ptr(), kva, 8) == uaccess::EFAULT
+        && uaccess::copyout(kva as *mut u8, kbuf.as_ptr(), 8) == uaccess::EFAULT
 }
 
 /// Runtime self-proof of the generated symbol table: an exact hit on a

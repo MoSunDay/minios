@@ -14,6 +14,22 @@ unsafe extern "C" {
 
 static NEXT_PID: AtomicI32 = AtomicI32::new(1);
 
+/// The reaper process (init): orphans are handed to it on exit so no child
+/// keeps a parent link into a ptable slot that freeproc is about to reuse.
+/// Null before `userinit` succeeds (kernel-only suites never exit).
+static mut INITPROC: *mut Proc = null_mut();
+
+/// The init/reaper process, or null before userinit.
+pub fn initproc() -> *mut Proc {
+    // SAFETY: reading a raw-pointer static; no reference is formed.
+    unsafe { core::ptr::read(core::ptr::addr_of!(INITPROC)) }
+}
+
+fn set_initproc(p: *mut Proc) {
+    // SAFETY: boot context (userinit), ptable quiescent.
+    unsafe { core::ptr::write(core::ptr::addr_of_mut!(INITPROC), p) };
+}
+
 /// The process running on this CPU (null in scheduler context).
 pub fn myproc() -> *mut Proc {
     // SAFETY: reading a pointer field; no reference to the static is made.
@@ -103,6 +119,19 @@ pub fn exit(status: i32) -> ! {
         let p = myproc();
         // S4: close files and cwd here.
         let _guard = PTABLE_LOCK.lock();
+        // Reparent orphans (xv6 exit): children must not keep a parent
+        // link into the slot this exit frees. Without init (kernel-only
+        // boot) they become unreapable zombies, never dangling links.
+        {
+            // SAFETY: ptable lock held.
+            let table = super::ptable_mut();
+            for i in 0..NPROC {
+                let child = &mut table[i] as *mut Proc;
+                if child != p && (*child).parent == p {
+                    (*child).parent = initproc();
+                }
+            }
+        }
         // Wake the parent (if any) — xv6 wakeup1 with the ptable held.
         super::sleep::wakeup1(super::ptable_chan());
         (*p).state = ProcState::ZOMBIE;
@@ -174,11 +203,17 @@ pub fn fork() -> i32 {
             freeproc(np);
             return -1;
         }
-        if !(*me).tf.is_null() && !(*np).tf.is_null() {
-            core::ptr::copy_nonoverlapping((*me).tf, (*np).tf, 1);
-            // Child returns 0 from the (never-taken-in-parent) fork call.
-            (*(*np).tf).rax = 0;
+        if (*me).tf.is_null() || (*np).tf.is_null() {
+            // No user trapframe to duplicate (kernel-thread fork is
+            // unsupported); fail cleanly instead of scheduling a zeroed
+            // frame that would iretq to rip 0.
+            let _guard = PTABLE_LOCK.lock();
+            freeproc(np);
+            return -1;
         }
+        core::ptr::copy_nonoverlapping((*me).tf, (*np).tf, 1);
+        // Child returns 0 from the (never-taken-in-parent) fork call.
+        (*(*np).tf).rax = 0;
         (*np).parent = me;
         core::ptr::copy_nonoverlapping(
             core::ptr::addr_of!((*me).fpu) as *const u8,
@@ -279,6 +314,7 @@ pub fn userinit(image: &[u8]) -> bool {
             Ok(()) => {
                 let _guard = PTABLE_LOCK.lock();
                 (*p).state = ProcState::RUNNABLE;
+                set_initproc(p);
                 drop(_guard);
                 true
             }

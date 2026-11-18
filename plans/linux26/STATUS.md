@@ -147,3 +147,32 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
     头稳定为 `_m1r_fault_driver_frame+`。
   - verdict 侧：MAGIC_RSI 补齐位数（原少一组 0）、KERNEL_CS 更正 0x08（GDT code=8）、
     M1RFault 行解析容忍 GRUB 横幅残留的前导 CR（与 m0r 判定同一工件）。
+
+2026-11-18 闭环增量（M1R-S2 review 硬化，本地全绿后提交）：
+
+- fork/exit 前置修复（S3 点亮用户链前的隐患）：exit() 现按 xv6 语义把孤儿子进程
+  reparent 到 INITPROC（userinit 成功时登记；无 init 的内核态引导下孤儿退化为
+  不可回收 zombie，绝不保留可复用槽位的悬垂 parent 指针）；fork() 在父/子任一
+  tf 为空时干净失败（-1），不再静默调度 rip=0 的零帧。
+- uaccess 收紧：新增 USER_TOP=2^47 预检——copyin/copyout/probe 对内核半区指针
+  直接 EFAULT（不触碰任何字节），copyinstr 以 USER_TOP-src 封顶扫描（内核半区
+  已映射，靠 cap 而非缺页兜底）。m1r-suite 增第 5 用例 m1r.uaccess.kernelptr_efault
+  （对 m1r_force_iret 地址 copyin+copyout 均须 EFAULT），runner 清单与自测夹具同步。
+- runner 硬化：verdict/mod.rs 抽出共享 base_outcome_errs/scan_forbidden（judge 与
+  judge_fault 复用，消除字面量漂移面）；judge_fault 新增「PASS 标记后不得再出现
+  M1RFault 行」检查；cr2==rdi 交叉校验改用 req（缺 cr2 即红）；errs sort+dedup
+  去除合成判定的重复理由。main.rs 每轮落盘 qemu.version（40 §1.1），临时目录
+  命名按 suite 标签，注释改为「两 M1R 目标仅 -cdrom 不同」。
+- 每轮独立 root 盘（40 §2.2）：Makefile 改为一次性生成 root-template.raw，各
+  target 每轮 rm -rf 后复制进各自 run 目录再挂 IDE，serial+root 双 sha 记账。
+- 小修三连：trapcommon.S 帧复制 21→20 qword（精确帧，消除对 trap-time rsp 的
+  越界读）；oops kernel_fault/user_fault 统一走 vector_kind()（DE/BP 不再降级
+  EX）；fixup::table() 边界检查移到减法前（dev overflow-checks 下防御有效）。
+- 死树清理：删除未被 kernel/mod.rs 声明的 kernel/src/kernel/sched/（整目录，
+  grep 影子 proc/fork）与 kernel/src/usercall/（影子 syscall/sysarg）。
+- 证据（verdict: PASS）：m1r-suite `bd23c5bd…38d4`（5 用例，exit 33，root
+  `30e14955…cb58`）；m1r-fault `53b8aac7…5325`（exit 35——与 S2 `5ca25fdb…`
+  的差异仅为链接布局位移：_m1rf_rodata_target 0x…8000→0x…9000、crate
+  disambiguator 与深层帧偏移；5 条注入的 rip/backtrace 头偏移逐字节不变，D-3
+  前缀契约不受影响）；M0R `71f9cf19…5adf` 字节不变；make test 58 例、fmt-check、
+  build、check-layout 全绿。

@@ -63,13 +63,13 @@ isr_common:
     jmp .Lframe_ready
 .Lfrom_kernel:
     push_all_regs
-    /* Shift the whole 21-slot frame down 16 bytes and synthesize rsp/ss
+    /* Shift the whole 20-qword frame down 16 bytes and synthesize rsp/ss
      * (64-bit iretq pops all five tail slots). Registers are free: every
      * GPR is already saved inside the frame being copied. */
     subq $16, %rsp
     movq %rsp, %rdi
     leaq 16(%rsp), %rsi
-    movl $21, %ecx
+    movl $20, %ecx
     cld
     rep movsq
     leaq 176(%rsp), %rax      /* rsp at trap time: frame base + 176 */

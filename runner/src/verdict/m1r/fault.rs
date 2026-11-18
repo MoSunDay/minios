@@ -4,7 +4,9 @@
 //! unexpected fault stays red. Its PASS never substitutes for an ordinary
 //! suite verdict.
 
-use super::super::{judge, RunOutcome, SuiteSpec, MARKER_FAIL, MARKER_FATAL, MARKER_PASS};
+use super::super::{
+    base_outcome_errs, judge, parse_kv, scan_forbidden, RunOutcome, SuiteSpec, MARKER_PASS,
+};
 use super::{
     FaultCaseSpec, FaultSpec, EXPECTED_FAULT_EXIT_CODE, KERNEL_CS, MAGIC_R10, MAGIC_RAX, MAGIC_RBX,
     MAGIC_RDI, MAGIC_RDX, MAGIC_RSI, USER_UNMAPPED_VA,
@@ -35,11 +37,7 @@ impl FaultLine {
 
 fn parse_fields(line: &str) -> FaultLine {
     FaultLine {
-        fields: line
-            .split_whitespace()
-            .filter_map(|tok| tok.split_once('='))
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
+        fields: parse_kv(&line["M1RFault ".len()..]),
     }
 }
 
@@ -56,48 +54,33 @@ fn parse_hex(v: &str, what: &str, i: usize, errs: &mut Vec<String>) -> Option<u6
 /// Judge one expected-fault run. `Ok(())` is green; `Err(reasons)` lists
 /// every violation (never early-returns on the first).
 pub fn judge_fault(spec: &FaultSpec, outcome: &RunOutcome) -> Result<(), Vec<String>> {
-    let mut errs: Vec<String> = Vec::new();
-
-    if outcome.timed_out {
-        errs.push("timeout: suite deadline exceeded before QEMU exit".to_string());
-    }
-    match outcome.exit_code {
-        Some(EXPECTED_FAULT_EXIT_CODE) => {}
-        Some(code) => errs.push(format!("exit code {code} != {EXPECTED_FAULT_EXIT_CODE}")),
-        None => errs.push("no QEMU exit code (killed or unreaped)".to_string()),
-    }
-
+    let mut errs = base_outcome_errs(outcome, EXPECTED_FAULT_EXIT_CODE);
     let log = outcome.serial_log.as_str();
     if log.trim().is_empty() {
-        errs.push("empty serial log".to_string());
         return Err(errs);
     }
 
-    // Collect M1RFault lines, CASE lines, and scan for anything fatal.
+    // Collect M1RFault/CASE lines and the pass-marker position; the shared
+    // red scan owns non-pass markers and fatal/fail/panic content.
     let mut fault_lines: Vec<(usize, &str)> = Vec::new();
     let mut case_lines: Vec<(usize, &str)> = Vec::new();
+    let mut pass_marker_idx: Option<usize> = None;
     for (idx, raw) in log.lines().enumerate() {
-        // GRUB's banner ends LF+CR, leaving a leading CR on the next line.
         let line = raw.trim_matches(['\r']);
         if line.starts_with("M1RFault ") {
             fault_lines.push((idx, line));
-            continue;
-        }
-        if line.starts_with("CASE ") {
+        } else if line.starts_with("CASE ") {
             case_lines.push((idx, line));
-            continue;
+        } else if line.starts_with(MARKER_PASS) {
+            pass_marker_idx = Some(idx);
         }
-        if line.starts_with("MINIOS_X86_64_TEST_") {
-            if !line.starts_with(MARKER_PASS) {
-                errs.push(format!("non-pass marker in log: {line}"));
-            }
-            continue;
-        }
-        if line.contains(MARKER_FAIL)
-            || line.contains(MARKER_FATAL)
-            || line.to_ascii_lowercase().contains("panic")
-        {
-            errs.push(format!("fatal/fail/panic in log: {line}"));
+    }
+    errs.extend(scan_forbidden(log));
+
+    // No fault may be reported after the totals marker.
+    if let Some(marker_idx) = pass_marker_idx {
+        if fault_lines.iter().any(|(i, _)| *i > marker_idx) {
+            errs.push("M1RFault line after the pass marker".to_string());
         }
     }
 
@@ -141,6 +124,7 @@ pub fn judge_fault(spec: &FaultSpec, outcome: &RunOutcome) -> Result<(), Vec<Str
         .iter()
         .map(|c| c.fault_id)
         .collect::<Vec<_>>()
+        // One-shot process: the leak outlives the verdict, then we exit.
         .leak();
     let suite_outcome = RunOutcome {
         serial_log: outcome.serial_log.clone(),
@@ -159,6 +143,10 @@ pub fn judge_fault(spec: &FaultSpec, outcome: &RunOutcome) -> Result<(), Vec<Str
             }
         }
     }
+
+    // The synthetic judge re-runs the shared scans; keep each reason once.
+    errs.sort();
+    errs.dedup();
 
     if errs.is_empty() {
         Ok(())
@@ -247,15 +235,16 @@ fn check_fault_line(
             ));
         }
     }
-    // cr2 cross-check for the unmapped-VA fault.
+    // cr2 cross-check for the unmapped-VA fault (a missing cr2 is red).
     if case_spec.cr2_eq_rdi {
-        let (cr2, rdi) = (fl.get("cr2"), fl.get("rdi"));
-        if cr2.is_some() && rdi.is_some() && cr2 != rdi {
-            errs.push(format!(
-                "M1RFault #{i} cr2={} != rdi={} for the unmapped-VA fault",
-                cr2.unwrap(),
-                rdi.unwrap()
-            ));
+        if let Some(cr2) = fl.req("cr2", errs) {
+            if let Some(rdi) = fl.get("rdi") {
+                if cr2 != rdi {
+                    errs.push(format!(
+                        "M1RFault #{i} cr2={cr2} != rdi={rdi} for the unmapped-VA fault"
+                    ));
+                }
+            }
         }
     }
     // The extra fault-kind line directly under a #PF line.

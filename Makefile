@@ -15,8 +15,9 @@ RUNNER   := cargo run --offline -q -p minios-runner --target $(HOST_TARGET) --
 
 # CORE-UP-GRUB image pieces (ADR-0014; frozen in plans/linux26/40).
 # M1R (S2) adds two cmdline variants + the frozen raw-IDE root drive
-# (CORE-UP-GRUB-R1, 40 §1.2): root.raw is a placeholder zero disk until the
-# S3 Rust mkfs takes it over.
+# (CORE-UP-GRUB-R1, 40 §1.2): a pristine 1 MiB zero template is copied into
+# each run dir per round (40 §2.2 per-round images); the S3 Rust mkfs takes
+# the disk over later.
 GRUB_CFG := scripts/m0r-grub-early.cfg
 M1R_SUITE_CFG := scripts/m1r-suite-grub.cfg
 M1R_FAULT_CFG := scripts/m1r-fault-grub.cfg
@@ -29,7 +30,7 @@ M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
 RUN_DIR  := $(TARGET_DIR)/m0r-run
 M1R_SUITE_RUN := $(TARGET_DIR)/m1r-suite-run
 M1R_FAULT_RUN := $(TARGET_DIR)/m1r-fault-run
-ROOT_RAW := $(TARGET_DIR)/root.raw
+ROOT_TEMPLATE := $(TARGET_DIR)/root-template.raw
 GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial echo boot search memdisk
 
 .PHONY: all build check-layout m0r-iso m1r-iso m1r-fault-iso test-qemu-smoke run-smoke \
@@ -82,8 +83,10 @@ m1r-iso: build
 m1r-fault-iso: build
 	$(call make-m1r-iso,$(M1R_FAULT_DIR),$(M1R_FAULT_CFG),$(M1R_FAULT_ISO))
 
-# Placeholder root disk (1 MiB zero image; S3 Rust mkfs takes it over).
-$(ROOT_RAW):
+# Pristine root-disk template (1 MiB zero image; S3 Rust mkfs takes it
+# over later). Never attached to QEMU directly: every round copies it fresh
+# into its own run dir (40 §2.2).
+$(ROOT_TEMPLATE):
 	dd if=/dev/zero of=$@ bs=1M count=1 status=none
 
 # Real QEMU boot + strict verdict (exit 33, protocol line, all cases).
@@ -96,17 +99,22 @@ test-qemu-smoke: m0r-iso
 run-smoke: test-qemu-smoke
 
 # M1R kernel-mode suite (CORE-UP-GRUB-R1: + frozen raw IDE root disk).
-test-qemu: m1r-iso $(ROOT_RAW)
+test-qemu: m1r-iso $(ROOT_TEMPLATE)
 	@rm -rf $(M1R_SUITE_RUN)
-	$(RUNNER) run-m1r-suite --iso $(M1R_SUITE_ISO) --root $(ROOT_RAW) --work-dir $(M1R_SUITE_RUN)
-	@sha256sum $(M1R_SUITE_RUN)/serial.log
+	@mkdir -p $(M1R_SUITE_RUN)
+	@cp $(ROOT_TEMPLATE) $(M1R_SUITE_RUN)/root.raw
+	$(RUNNER) run-m1r-suite --iso $(M1R_SUITE_ISO) --root $(M1R_SUITE_RUN)/root.raw --work-dir $(M1R_SUITE_RUN)
+	@sha256sum $(M1R_SUITE_RUN)/serial.log $(M1R_SUITE_RUN)/root.raw
 
 # M1R expected-fault suite: dedicated log namespace + verdict (40 §2.1.6);
-# argv identical to test-qemu (byte-pinned by the runner self-tests).
-test-expected-fault: m1r-fault-iso $(ROOT_RAW)
+# argv identical to test-qemu except the -cdrom image (construction
+# byte-pinned by the runner self-tests).
+test-expected-fault: m1r-fault-iso $(ROOT_TEMPLATE)
 	@rm -rf $(M1R_FAULT_RUN)
-	$(RUNNER) run-m1r-fault --iso $(M1R_FAULT_ISO) --root $(ROOT_RAW) --work-dir $(M1R_FAULT_RUN)
-	@sha256sum $(M1R_FAULT_RUN)/serial.log
+	@mkdir -p $(M1R_FAULT_RUN)
+	@cp $(ROOT_TEMPLATE) $(M1R_FAULT_RUN)/root.raw
+	$(RUNNER) run-m1r-fault --iso $(M1R_FAULT_ISO) --root $(M1R_FAULT_RUN)/root.raw --work-dir $(M1R_FAULT_RUN)
+	@sha256sum $(M1R_FAULT_RUN)/serial.log $(M1R_FAULT_RUN)/root.raw
 
 # Host-side Rust tests: verdict fault self-tests + portable kernel modules.
 test: test-host

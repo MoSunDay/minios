@@ -14,10 +14,10 @@ pub fn table() -> &'static [FixupEntry] {
     unsafe {
         let start = core::ptr::addr_of!(__fixup_start) as usize;
         let end = core::ptr::addr_of!(__fixup_end) as usize;
-        let len = (end - start) / core::mem::size_of::<FixupEntry>();
         if end < start {
             return &[];
         }
+        let len = (end - start) / core::mem::size_of::<FixupEntry>();
         core::slice::from_raw_parts(start as *const FixupEntry, len)
     }
 }

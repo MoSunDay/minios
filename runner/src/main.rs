@@ -2,7 +2,7 @@
 //! Shell/Make only launches this binary; all judgement lives in Rust
 //! (plans/linux26 ADR-0013, 40 §2). M0R uses config CORE-UP-GRUB; the M1R
 //! suites use CORE-UP-GRUB-R1, appending the frozen raw-IDE root drive
-//! (40 §1.2) with byte-identical argv between the two M1R targets.
+//! (40 §1.2); both M1R invocations are identical except the -cdrom image.
 
 mod elfcheck;
 mod verdict;
@@ -177,7 +177,7 @@ fn cmd_run_suite(suite: Suite, cmd: &str, args: &[String]) -> i32 {
             }
             dir
         }
-        None => fresh_work_dir(),
+        None => fresh_work_dir(suite.suite_label()),
     };
     let serial = work.join("serial.log");
     let argv = qemu_argv(
@@ -190,6 +190,17 @@ fn cmd_run_suite(suite: Suite, cmd: &str, args: &[String]) -> i32 {
         },
     );
     println!("config_id={} argv={}", suite.config_id(), argv.join(" "));
+
+    // 40 §1.1: pin the exact QEMU build alongside every run's evidence.
+    let qver_path = work.join("qemu.version");
+    let qver = match Command::new(QEMU).arg("--version").output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim_end().to_string(),
+        Ok(o) => format!("qemu --version exited with status {}", o.status),
+        Err(e) => format!("cannot run {QEMU} --version: {e}"),
+    };
+    if let Err(e) = std::fs::write(&qver_path, format!("{qver}\n")) {
+        return bad(&format!("cannot write {}: {e}", qver_path.display()));
+    }
 
     let log = std::fs::read_to_string(&serial).unwrap_or_default();
     if !log.is_empty() {
@@ -319,12 +330,13 @@ fn qemu_argv(iso: &Path, serial: &Path, root: Option<&Path>) -> Vec<String> {
     argv
 }
 
-fn fresh_work_dir() -> PathBuf {
+fn fresh_work_dir(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let base = std::env::temp_dir().join(format!("minios-m0r-{}-{}", std::process::id(), nanos));
+    let base =
+        std::env::temp_dir().join(format!("minios-{label}-{}-{}", std::process::id(), nanos));
     let _ = std::fs::create_dir_all(&base);
     base
 }
@@ -385,7 +397,8 @@ mod tests {
             suite.last().unwrap(),
             "file=/run/root.raw,format=raw,if=ide,index=0,cache=writeback,snapshot=off"
         );
-        // The two M1R targets share one argv byte-for-byte (T5 gate).
+        // Both M1R targets build the argv identically (real runs differ
+        // only in the -cdrom image).
         assert_eq!(suite, fault);
         // And the M0R argv is a strict prefix of it.
         let m0r = qemu_argv(

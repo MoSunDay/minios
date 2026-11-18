@@ -20,6 +20,7 @@ pub fn m1r_suite_spec() -> SuiteSpec {
             "m1r.irq.pit",
             "m1r.uaccess.copyin_efault",
             "m1r.uaccess.copyout_efault",
+            "m1r.uaccess.kernelptr_efault",
             "m1r.ksym.self",
         ],
     }
