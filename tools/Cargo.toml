@@ -1,0 +1,15 @@
+# minios Rust host tools (plans/linux26/04 §5): mkfs replaces the C
+# tools/mkfs.c pipeline from M1R on (Rust-only tree, decision D2).
+[package]
+name = "minios-tools"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "minios host tools: Rust mkfs for the xv6 root image"
+
+# Zero external dependencies by design.
+[dependencies]
+
+[[bin]]
+name = "minios-mkfs"
+path = "src/bin/mkfs.rs"

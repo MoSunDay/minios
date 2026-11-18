@@ -115,11 +115,15 @@ m1r-iso: build
 m1r-fault-iso: build
 	$(call make-m1r-iso,$(M1R_FAULT_DIR),$(M1R_FAULT_CFG),$(M1R_FAULT_ISO))
 
-# Pristine root-disk template (1 MiB zero image; S3 Rust mkfs takes it
-# over later). Never attached to QEMU directly: every round copies it fresh
-# into its own run dir (40 §2.2).
-$(ROOT_TEMPLATE):
-	dd if=/dev/zero of=$@ bs=1M count=1 status=none
+# Root-disk template: the xv6 root image built by the S4 Rust mkfs
+# (minios-tools, plans/linux26/04 §5; byte-parity with tools/mkfs.c
+# proven at port time). Never attached to QEMU directly: every round
+# copies it fresh into its own run dir (40 §2.2).
+MKFS := cargo run --offline -q -p minios-tools --target $(HOST_TARGET) --bin minios-mkfs --
+$(ROOT_TEMPLATE): $(USER_ELFS) tools/src/lib.rs tools/src/bin/mkfs.rs tools/Cargo.toml
+	@rm -f $@
+	$(MKFS) $@ $(USER_ELFS)
+	@sha256sum $@
 
 # Real QEMU boot + strict verdict (exit 33, protocol line, all cases).
 # Evidence (serial.log, qemu.stderr) is kept under $(RUN_DIR) for hashing.
@@ -156,6 +160,7 @@ test: test-host
 test-host:
 	RUSTFLAGS='-D warnings' cargo test --locked --offline -p minios-host-tests --target $(HOST_TARGET)
 	RUSTFLAGS='-D warnings' cargo test --locked --offline -p minios-runner --target $(HOST_TARGET)
+	RUSTFLAGS='-D warnings' cargo test --locked --offline -p minios-tools --target $(HOST_TARGET)
 
 fmt:
 	cargo fmt
