@@ -40,10 +40,6 @@ pub enum ProcState {
 #[repr(C, align(16))]
 pub struct FpuArea(pub [u8; 512]);
 
-/// open-file slot; the concrete ref type arrives with the fs port (S4).
-#[allow(dead_code)] // S4
-pub type FileSlot = usize; // 0 = closed, else fd cookie (S4 replaces)
-
 pub struct Proc {
     pub state: ProcState,
     pub pid: i32,
@@ -55,7 +51,10 @@ pub struct Proc {
     pub killed: i32,
     pub xstate: i32,
     pub fpu: FpuArea,
-    pub cwd: usize, // inode slot id (S4)
+    /// Open files (xv6 proc.h ofile; fd == index; null == closed).
+    pub ofile: [*mut crate::fs::file_table::File; NOFILE],
+    /// Current directory (xv6 proc.h cwd); set by userinit/chdir.
+    pub cwd: *mut crate::fs::xv6fs::inode::Inode,
     pub name: [u8; 16],
 }
 
@@ -80,7 +79,8 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
         killed: 0,
         xstate: 0,
         fpu: FpuArea([0; 512]),
-        cwd: 0,
+        ofile: [core::ptr::null_mut(); NOFILE],
+        cwd: core::ptr::null_mut(),
         name: [0; 16],
     }
 }; NPROC];

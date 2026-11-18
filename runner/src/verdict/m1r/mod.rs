@@ -27,6 +27,7 @@ pub fn m1r_suite_spec() -> SuiteSpec {
             "m1r.ksym.self",
             "m1r.fs.blockread",
             "m1r.fs.inode",
+            "m1r.fs.file",
             "m1r.user.write",
             "m1r.user.getpid_fork",
             "m1r.user.fork_wait",
@@ -35,6 +36,9 @@ pub fn m1r_suite_spec() -> SuiteSpec {
             "m1r.user.brk",
             "m1r.user.sse_crosstalk",
             "m1r.user.syscall_regs",
+            "m1r.user.open_read",
+            "m1r.user.pipe",
+            "m1r.user.dup_close",
         ],
     }
 }

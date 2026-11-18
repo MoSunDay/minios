@@ -18,6 +18,13 @@ pub const SYS_EXECVE: u64 = 59;
 pub const SYS_GETPID: u64 = 39;
 pub const SYS_FORK: u64 = 57;
 pub const SYS_EXIT: u64 = 60;
+pub const SYS_FSTAT: u64 = 5;
+pub const SYS_DUP: u64 = 32;
+pub const SYS_MKDIR: u64 = 83;
+pub const SYS_CHDIR: u64 = 80;
+pub const SYS_LINK: u64 = 86;
+pub const SYS_UNLINK: u64 = 87;
+pub const SYS_MKNOD: u64 = 133;
 pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;
 pub const SYS_EXIT_GROUP: u64 = 231;
@@ -47,6 +54,17 @@ pub const ERANGE: i64 = -34;
 pub const ENAMETOOLONG: i64 = -36;
 pub const ENOSYS: i64 = -38;
 pub const ENOTEMPTY: i64 = -39;
+
+/// open(2) flags (asm-generic, x86-64): the M1R subset. xv6's only
+/// extension O_CREATE maps to Linux O_CREAT (same semantic: create if
+/// missing); O_EXCL/O_TRUNC/O_APPEND parse but only affect create logic.
+pub const O_RDONLY: u64 = 0o0;
+pub const O_WRONLY: u64 = 0o1;
+pub const O_RDWR: u64 = 0o2;
+pub const O_CREAT: u64 = 0o100;
+pub const O_EXCL: u64 = 0o200;
+pub const O_TRUNC: u64 = 0o1000;
+pub const O_APPEND: u64 = 0o2000;
 
 /// Linux syscall return contract: values in -4095..=-1 carry an errno
 /// (plans/linux26/04 §3); the user runtime converts exactly this range.

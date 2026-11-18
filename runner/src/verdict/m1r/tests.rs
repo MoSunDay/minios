@@ -13,6 +13,7 @@ CASE m1r.uaccess.kernelptr_efault PASS\n\
 CASE m1r.ksym.self PASS\n\
 CASE m1r.fs.blockread PASS\n\
 CASE m1r.fs.inode PASS\n\
+CASE m1r.fs.file PASS\n\
 m1r-user-write-ok\n\
 CASE m1r.user.write PASS\n\
 CASE m1r.user.getpid_fork PASS\n\
@@ -24,7 +25,12 @@ CASE m1r.user.brk PASS\n\
 CASE m1r.user.sse_crosstalk PASS\n\
 r\n\
 CASE m1r.user.syscall_regs PASS\n\
-MINIOS_X86_64_TEST_PASS_V1 suite=m1r run=core-up total=15 passed=15 failed=0 skipped=0\n";
+CASE m1r.user.open_read PASS\n\
+CASE m1r.user.pipe PASS\n\
+m1r-user-dup-ok\n\
+d\n\
+CASE m1r.user.dup_close PASS\n\
+MINIOS_X86_64_TEST_PASS_V1 suite=m1r run=core-up total=19 passed=19 failed=0 skipped=0\n";
 
 fn fault_outcome(log: &str, exit: Option<i32>, timeout: bool) -> RunOutcome {
     RunOutcome {
@@ -271,7 +277,7 @@ fn wrong_suite_marker_is_red() {
 fn specs_are_frozen() {
     let suite = m1r_suite_spec();
     assert_eq!(suite.suite, "m1r");
-    assert_eq!(suite.expected_cases.len(), 15);
+    assert_eq!(suite.expected_cases.len(), 19);
     let fault = m1r_fault_spec();
     assert_eq!(fault.suite, "m1r-fault");
     assert_eq!(fault.cases.len(), 5);

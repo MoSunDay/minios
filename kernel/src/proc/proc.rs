@@ -69,7 +69,10 @@ pub unsafe fn allocproc() -> *mut Proc {
         (*p).killed = 0;
         (*p).xstate = 0;
         (*p).chan = 0;
-        (*p).cwd = 0;
+        (*p).cwd = null_mut();
+        for fd in 0..(*p).ofile.len() {
+            (*p).ofile[fd] = null_mut();
+        }
         (*p).name = [0; 16];
         (*p).mm = None;
         fpu::init_area(&mut (*p).fpu);
@@ -108,6 +111,11 @@ pub unsafe fn freeproc(p: *mut Proc) {
     (*p).chan = 0;
     (*p).parent = null_mut();
     (*p).tf = null_mut();
+    // Files/cwd were closed by exit(); clear the slots for reuse.
+    for fd in 0..(*p).ofile.len() {
+        (*p).ofile[fd] = null_mut();
+    }
+    (*p).cwd = null_mut();
     (*p).pid = 0;
     (*p).state = ProcState::UNUSED;
 }
@@ -117,7 +125,20 @@ pub fn exit(status: i32) -> ! {
     // SAFETY: process context on its own kernel stack.
     unsafe {
         let p = myproc();
-        // S4: close files and cwd here.
+        // Close all open files and drop the cwd (xv6 exit, before the
+        // ptable lock: fileclose/iput may sleep and write the fs).
+        for fd in 0..(*p).ofile.len() {
+            if !(*p).ofile[fd].is_null() {
+                crate::fs::file_table::fileclose((*p).ofile[fd]);
+                (*p).ofile[fd] = core::ptr::null_mut();
+            }
+        }
+        if !(*p).cwd.is_null() {
+            crate::fs::xv6fs::log::begin_op();
+            crate::fs::xv6fs::inode::iput((*p).cwd);
+            crate::fs::xv6fs::log::end_op();
+            (*p).cwd = core::ptr::null_mut();
+        }
         let _guard = PTABLE_LOCK.lock();
         // Reparent orphans (xv6 exit): children must not keep a parent
         // link into the slot this exit frees. Without init (kernel-only
@@ -229,6 +250,15 @@ pub fn fork() -> i32 {
             (*np).name.as_mut_ptr(),
             (*me).name.len(),
         );
+        // Inherit open files (filedup) and the cwd (idup), xv6 fork.
+        for fd in 0..(*me).ofile.len() {
+            if !(*me).ofile[fd].is_null() {
+                (*np).ofile[fd] = crate::fs::file_table::filedup((*me).ofile[fd]);
+            }
+        }
+        if !(*me).cwd.is_null() {
+            (*np).cwd = crate::fs::xv6fs::inode::idup((*me).cwd);
+        }
     }
     let pid = unsafe { (*np).pid };
     let _guard = PTABLE_LOCK.lock();
@@ -322,6 +352,12 @@ pub fn userinit_named(image: &[u8], name: &[u8], argv: &[&[u8]]) -> bool {
         let tf = kstack_tf(p);
         match exec::exec_elf(p, &mut *tf, image, argv) {
             Ok(()) => {
+                // Root cwd (xv6 userinit's namei("/")); fds stay closed —
+                // the driver opens the console like xv6 init.c.
+                (*p).cwd = crate::fs::xv6fs::inode::iget(
+                    crate::fs::xv6fs::layout::ROOTDEV,
+                    crate::fs::xv6fs::layout::ROOTINO,
+                );
                 let _guard = PTABLE_LOCK.lock();
                 (*p).state = ProcState::RUNNABLE;
                 set_initproc(p);

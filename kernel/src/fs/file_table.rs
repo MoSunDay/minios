@@ -4,15 +4,19 @@
 //! Inode{ip,off} == FD_INODE, Pipe{pipe,writable} == FD_PIPE. `readable`
 //! stays a per-file flag (xv6 struct file); for pipes, `writable` is
 //! carried in the enum variant, exactly the pair pipealloc sets.
+//!
+//! Deviation from xv6: fileread/filewrite take KERNEL buffers. The sys
+//! layer (kernel/sysfile.rs) bounces user memory through the fixup-guarded
+//! copyin/copyout, so a bad user pointer fails with EFAULT instead of
+//! faulting inside readi/writei (this kernel's uaccess discipline).
 
-use core::ptr::{addr_of_mut, null_mut, read};
+use core::ptr::addr_of_mut;
 
 use crate::fs::xv6fs::inode::{ilock, iput, iunlock, readi, stati, writei, Inode};
+use crate::fs::xv6fs::layout::{Stat, LOGSIZE, NFILE};
 use crate::fs::xv6fs::log::{begin_op, end_op};
-use crate::fs::{Stat, NFILE};
 use crate::ipc::pipe::{pipeclose, piperead, pipewrite, Pipe};
-use crate::kernel::sched::LOGSIZE;
-use crate::kernel::sched::{acquire, release, RawLock};
+use crate::klib::sync::Spinlock;
 
 /// file.h enum: FD_NONE / FD_PIPE / FD_INODE.
 #[derive(Clone, Copy)]
@@ -31,46 +35,67 @@ pub struct File {
     pub writable: i32,
 }
 
-/// file.c `ftable`.
-pub static mut FTABLE: [File; NFILE] = [File {
+const FILE_CLOSED: File = File {
     state: FileState::Closed,
     ref_: 0,
     readable: 0,
     writable: 0,
-}; NFILE];
-pub static FTABLE_LOCK: RawLock = RawLock::new("ftable");
+};
+
+/// file.c `ftable` (the lock is a sibling static like the icache split).
+// SAFETY: slots are guarded by FTABLE_LOCK; the statics are unique.
+pub static mut FTABLE: [File; NFILE] = [FILE_CLOSED; NFILE];
+pub static FTABLE_LOCK: Spinlock<()> = Spinlock::new("ftable", ());
+
+/// xv6 acquire()/release() spelling over the spinlock primitive.
+/// SAFETY: caller must balance each acquire with a release of the same lock.
+#[inline]
+unsafe fn acquire(l: &Spinlock<()>) {
+    l.raw_lock();
+}
+
+/// SAFETY: the lock must be held by this context.
+#[inline]
+unsafe fn release(l: &Spinlock<()>) {
+    l.raw_release();
+}
 
 /// Allocate a file structure.
 ///
 /// SAFETY: returns a raw pointer into the static ftable; holds FTABLE_LOCK
 /// only while scanning (ref == 1 on success, like xv6).
 pub unsafe fn filealloc() -> *mut File {
-    acquire(&FTABLE_LOCK);
-    for i in 0..NFILE {
-        // SAFETY: distinct slot, lock held.
-        let f = unsafe { addr_of_mut!(FTABLE[i]) };
-        if unsafe { (*f).ref_ } == 0 {
-            unsafe { (*f).ref_ = 1 };
-            release(&FTABLE_LOCK);
-            return f;
+    // SAFETY: FTABLE_LOCK guards every slot; the raw pointer stays inside.
+    unsafe {
+        acquire(&FTABLE_LOCK);
+        for i in 0..NFILE {
+            let f = addr_of_mut!(FTABLE[i]);
+            if (*f).ref_ == 0 {
+                (*f).ref_ = 1;
+                release(&FTABLE_LOCK);
+                return f;
+            }
         }
+        release(&FTABLE_LOCK);
+        core::ptr::null_mut()
     }
-    release(&FTABLE_LOCK);
-    null_mut()
 }
 
 /// Increment ref count for file f.
 ///
 /// SAFETY: `f` must come from filealloc (ref >= 1).
 pub unsafe fn filedup(f: *mut File) -> *mut File {
-    acquire(&FTABLE_LOCK);
-    if unsafe { (*f).ref_ } < 1 {
+    // SAFETY: FTABLE_LOCK guards the ref count.
+    unsafe {
+        acquire(&FTABLE_LOCK);
+        if (*f).ref_ < 1 {
+            release(&FTABLE_LOCK);
+            panic!("filedup");
+        }
+        (*f).ref_ += 1;
         release(&FTABLE_LOCK);
-        panic!("filedup");
+        f
     }
-    unsafe { (*f).ref_ += 1 };
-    release(&FTABLE_LOCK);
-    f
 }
 
 /// Close file f. (Decrement ref count, close when reaches 0.)
@@ -78,26 +103,28 @@ pub unsafe fn filedup(f: *mut File) -> *mut File {
 /// SAFETY: `f` must come from filealloc/filedup; the pointer must not be
 /// used again once this drops the last reference.
 pub unsafe fn fileclose(f: *mut File) {
-    acquire(&FTABLE_LOCK);
-    if unsafe { (*f).ref_ } < 1 {
-        release(&FTABLE_LOCK);
-        panic!("fileclose");
-    }
-    unsafe { (*f).ref_ -= 1 };
-    if unsafe { (*f).ref_ } > 0 {
-        release(&FTABLE_LOCK);
-        return;
-    }
-    // Copy the state out under the lock, then close without it (xv6 `ff`).
-    // SAFETY: snapshot of the slot we own exclusively (ref hit 0).
-    let ff = unsafe { read(&(*f).state) };
+    let ff;
+    // SAFETY: FTABLE_LOCK guards the ref/state transitions.
     unsafe {
+        acquire(&FTABLE_LOCK);
+        if (*f).ref_ < 1 {
+            release(&FTABLE_LOCK);
+            panic!("fileclose");
+        }
+        (*f).ref_ -= 1;
+        if (*f).ref_ > 0 {
+            release(&FTABLE_LOCK);
+            return;
+        }
+        // Copy the state out under the lock, then close without it
+        // (xv6 `ff` — pipeclose/iput may sleep).
+        ff = (*f).state;
         (*f).ref_ = 0;
         (*f).state = FileState::Closed;
         (*f).readable = 0;
         (*f).writable = 0;
+        release(&FTABLE_LOCK);
     }
-    release(&FTABLE_LOCK);
 
     match ff {
         FileState::Pipe { pipe, writable } => unsafe { pipeclose(pipe, writable) },
@@ -127,23 +154,23 @@ pub unsafe fn filestat(f: *mut File, st: *mut Stat) -> i32 {
     -1
 }
 
-/// Read from file f.
+/// Read from file f into a KERNEL buffer.
 ///
-/// SAFETY: `addr` is a USER virtual address (myproc()'s page table is
-/// active); it was validated by argptr to lie within proc->sz.
-pub unsafe fn fileread(f: *mut File, addr: *mut u8, n: i32) -> i32 {
+/// SAFETY: `dst` must be valid for `n` bytes of kernel memory; `f` from
+/// filealloc.
+pub unsafe fn fileread(f: *mut File, dst: *mut u8, n: i32) -> i32 {
     if unsafe { (*f).readable } == 0 {
         return -1;
     }
-    // SAFETY: dispatch on the snapshot of f's state.
-    match unsafe { &mut (*f).state } {
-        FileState::Pipe { pipe, .. } => unsafe { piperead(*pipe, addr, n) },
-        FileState::Inode { ip, ref mut off } => unsafe {
-            let ip = *ip;
+    // SAFETY: FileState is Copy; snapshot, advance the offset, write back.
+    match unsafe { (*f).state } {
+        FileState::Pipe { pipe, .. } => unsafe { piperead(pipe, dst, n) },
+        FileState::Inode { ip, mut off } => unsafe {
             ilock(ip);
-            let r = readi(ip, addr, *off, n as u32);
+            let r = readi(ip, dst, off, n as u32);
             if r > 0 {
-                *off += r as u32;
+                off += r as u32;
+                (*f).state = FileState::Inode { ip, off };
             }
             iunlock(ip);
             r
@@ -152,35 +179,34 @@ pub unsafe fn fileread(f: *mut File, addr: *mut u8, n: i32) -> i32 {
     }
 }
 
-/// Write to file f.
+/// Write to file f from a KERNEL buffer.
 ///
-/// SAFETY: `addr` is a USER virtual address; see fileread.
-pub unsafe fn filewrite(f: *mut File, addr: *const u8, n: i32) -> i32 {
+/// SAFETY: `src` must be valid for `n` bytes of kernel memory.
+pub unsafe fn filewrite(f: *mut File, src: *const u8, n: i32) -> i32 {
     if unsafe { (*f).writable } == 0 {
         return -1;
     }
-    match unsafe { &mut (*f).state } {
-        FileState::Pipe { pipe, .. } => unsafe { pipewrite(*pipe, addr, n) },
-        FileState::Inode { ip, ref mut off } => unsafe {
+    // SAFETY: FileState is Copy; snapshot, advance the offset, write back.
+    match unsafe { (*f).state } {
+        FileState::Pipe { pipe, .. } => unsafe { pipewrite(pipe, src, n) },
+        FileState::Inode { ip, mut off } => unsafe {
             // Write a few blocks at a time to avoid exceeding the maximum
             // log transaction size, including i-node, indirect block,
             // allocation blocks, and 2 blocks of slop for non-aligned
-            // writes. This really belongs lower down, since writei() might
-            // be writing a device like the console.
-            let max = ((LOGSIZE - 1 - 1 - 2) / 2) * 512;
+            // writes (file.c filewrite).
+            let max = (((LOGSIZE - 1 - 1 - 2) / 2) * 512) as i32;
             let mut i: i32 = 0;
             while i < n {
                 let mut n1 = n - i;
                 if n1 > max {
                     n1 = max;
                 }
-                let ip = *ip;
-
                 begin_op();
                 ilock(ip);
-                let r = writei(ip, addr.add(i as usize), *off, n1 as u32);
+                let r = writei(ip, src.add(i as usize), off, n1 as u32);
                 if r > 0 {
-                    *off += r as u32;
+                    off += r as u32;
+                    (*f).state = FileState::Inode { ip, off };
                 }
                 iunlock(ip);
                 end_op();

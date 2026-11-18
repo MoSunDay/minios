@@ -10,6 +10,8 @@ pub mod oops;
 pub mod suite;
 pub mod sysarg;
 pub mod syscall;
+pub mod sysfile;
+pub mod syspath;
 pub mod tf_layout;
 pub mod time;
 pub mod traps;

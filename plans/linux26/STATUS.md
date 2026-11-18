@@ -248,3 +248,36 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   root `a37262fa…311a` == 模板——loginit 恢复重写的头块字节相同，只读性保持）；
   M0R `028048dd…92f1` 字节不变；m1r-fault exit 35；test-host 6 组（runner 44 例）、
   fmt、make all 绿。
+
+2026-11-19 S4d 闭环（文件表/管道/控制台 + 文件系统调用）：
+
+- file.c/pipe.c 移植：fs/file_table.rs（FileState 枚举 Closed/Inode{ip,off}/
+  Pipe{pipe,writable} 代替 C tag+union；FTABLE 静态+Spinlock 对；filewrite 按
+  LOGSIZE 分块事务）；ipc/pipe.rs（data[512] 环形缓冲，kalloc 块内嵌 Spinlock，
+  proc::sleep 通道取 addr_of!(nread/nwrite)，pipeclose drop_in_place+kfree）。
+  偏离（文件头已注）：fileread/filewrite 取内核缓冲——sys 层经 uaccess
+  copyin/copyout 弹跳，坏用户指针得 EFAULT 而非 readi/writei 内fault；xv6 一律
+  -1 改 Linux errno（EBADF/EMFILE/ENOENT/EEXIST/EISDIR/…）。
+- sys 层拆两文件：kernel/syspath.rs（copy_path 128B 弹跳、create、
+  sys_open/sys_mknod/sys_mkdir/sys_chdir/isdirempty/sys_unlink/sys_link，全部
+  begin_op/end_op 包裹）+ kernel/sysfile.rs（sys_read/sys_write 512B 弹跳、
+  sys_close/sys_dup/sys_fstat/sys_pipe/fdalloc）。abi 新增 SYS_FSTAT/DUP/CHDIR/
+  MKDIR/LINK/UNLINK/MKNOD 与 Linux O_* 旗标。
+- 控制台：drivers/char/console.rs 精简版（COM1 RX 中断，INPUT 128B 环+chan；
+  CTRL_D/U/H 行规程；devsw CONSOLE=1 注册；traps.rs IRQ_COM1=向量36）。
+  mkfs 不建 /console——xv6 语义：init（本树=m1r-suite 驱动 main）先 open，ENOENT
+  则 mknod(1,1)，再 dup 0×2 播种 stdin/stdout/stderr；此后 CASE 行经 fd1→file
+  表→devsw CONSOLE 打印（对齐 xv6-public init.c，kbd.c 弃——headless QEMU）。
+- proc：ofile[*mut File; NOFILE]/cwd: *mut Inode；exit 在 begin_op/end_op 内先
+  关全部 fd + iput(cwd)；fork 经 filedup/idup 继承；userinit_named 播种
+  cwd=iget(ROOTDEV,ROOTINO)。
+- 套件：内核用例 m1r.fs.file（引导上下文 filealloc+FileState::Inode 按 sys_open
+  同款所有权交接，fileread 两次共享偏移读比 userimg ELF、filestat/stati、
+  fileclose 归零复用）；用户用例 m1r.user.open_read（open /m1r-suite 读 ELF 魔数
+  +续读偏移 + 关闭后 EBADF）、m1r.user.pipe（双端往返 + EOF）、m1r.user.dup_close
+  （dup 写/关后原句柄仍活）。清单 19 用例（registry+fixture 同步 19）。
+- 证据（verdict: PASS，exit 33）：m1r-suite serial `4f412412…48d3`（total=19
+  passed=19 failed=0）；运行盘 root `72e55134…c6b0`≠模板——mknod("/console")
+  对每轮副本的合法改写（目录块+新 inode）；模板 `6d5aa94e…cd52`（随新 m1r-suite
+  ELF 重建）；M0R `028048dd…92f1` 字节不变；m1r-fault `1fbae812…f967` exit 35；
+  test-host 6 组（runner 44 例）、fmt、make all 绿。新文件均 ≤400 行。

@@ -68,7 +68,7 @@ pub fn finish_driver(status: i32) -> ! {
 pub fn run() -> ! {
     let mut total = 0u8;
     let mut passed = 0u8;
-    let checks: [(&str, fn() -> bool); 7] = [
+    let checks: [(&str, fn() -> bool); 8] = [
         ("m1r.irq.pit", case_irq_pit),
         ("m1r.uaccess.copyin_efault", case_copyin_efault),
         ("m1r.uaccess.copyout_efault", case_copyout_efault),
@@ -76,6 +76,7 @@ pub fn run() -> ! {
         ("m1r.ksym.self", case_ksym_self),
         ("m1r.fs.blockread", case_fs_blockread),
         ("m1r.fs.inode", case_fs_inode),
+        ("m1r.fs.file", case_fs_file),
     ];
     for (case_id, check) in checks {
         total += 1;
@@ -261,6 +262,78 @@ fn case_fs_inode() -> bool {
     // SAFETY: NUL-terminated literal.
     let miss = unsafe { namei(b"/enoent\0".as_ptr()) }.is_null();
     check("/m1r-suite") && check("/m1r-exec-child") && miss
+}
+
+/// S4d file.c: the descriptor-table layer in boot context (no myproc/fd
+/// path): filealloc + FileState::Inode following sys_open's exact
+/// ownership transfer (namei -> ilock -> file state -> iunlock), then
+/// fileread's shared-offset reads against the embedded ELF bytes,
+/// filestat/stati metadata, and fileclose's ref drop to Closed.
+fn case_fs_file() -> bool {
+    use crate::fs::file_table::{filealloc, fileclose, fileread, filestat, FileState};
+    use crate::fs::xv6fs::inode::{ilock, iunlock, iunlockput};
+    use crate::fs::xv6fs::layout::{Stat, T_FILE};
+    use crate::fs::xv6fs::namei::namei;
+
+    let Some(img) = super::userimg::lookup(b"/m1r-suite") else {
+        return false;
+    };
+    let mut cpath = [0u8; 11];
+    cpath[..10].copy_from_slice(b"/m1r-suite");
+    // SAFETY: mirrors sys_open: namei hands an iget'd reference, ilock
+    // makes it valid, the reference moves into the file slot, and
+    // fileclose later drops it through begin_op/iput/end_op.
+    let ip = unsafe { namei(cpath.as_ptr()) };
+    if ip.is_null() {
+        return false;
+    }
+    unsafe { ilock(ip) };
+    let f = unsafe { filealloc() };
+    if f.is_null() {
+        unsafe { iunlockput(ip) };
+        return false;
+    }
+    // SAFETY: f is ref 1 from filealloc; state handoff per sys_open.
+    unsafe {
+        (*f).state = FileState::Inode { ip, off: 0 };
+        (*f).readable = 1;
+        (*f).writable = 0;
+        iunlock(ip);
+    }
+
+    // Two 64-byte reads: bytes land in the kernel buffer and the file
+    // offset advances (second read returns the next block's bytes).
+    let mut buf = [0u8; 64];
+    let n1 = unsafe { fileread(f, buf.as_mut_ptr(), 64) };
+    let head = n1 == 64 && buf[..] == img[..64];
+    let mut b2 = [0u8; 64];
+    let n2 = unsafe { fileread(f, b2.as_mut_ptr(), 64) };
+    let cont = head && n2 == 64 && b2[..] == img[64..128];
+
+    // filestat: stati snapshot taken under ilock must name the same file.
+    let mut st = Stat {
+        type_: 0,
+        dev: 0,
+        ino: 0,
+        nlink: 0,
+        size: 0,
+    };
+    let stat_ok = cont
+        && unsafe { filestat(f, &mut st) == 0 }
+        && st.type_ == T_FILE
+        && st.size == img.len() as u32;
+
+    // Drop the last reference: the slot must return to Closed for reuse,
+    // and the second allocation must find the same slot free again.
+    unsafe { fileclose(f) };
+    let slot_ok = unsafe { (*f).ref_ == 0 && matches!((*f).state, FileState::Closed) };
+    let f2 = unsafe { filealloc() };
+    let realloc = !f2.is_null();
+    if realloc {
+        // Return the probe slot (Closed state -> ref drop is a no-op).
+        unsafe { fileclose(f2) };
+    }
+    stat_ok && slot_ok && realloc
 }
 
 fn write_decimal(value: u8) {

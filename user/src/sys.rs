@@ -101,3 +101,43 @@ pub fn brk(addr: u64) -> Result<u64, i64> {
 pub fn kill(pid: i32) -> Result<i64, i64> {
     call6(abi::SYS_KILL, pid as u64, 0, 0, 0, 0, 0)
 }
+
+/// open(path, flags). `path` must be NUL-terminated (rt builds C strings).
+pub fn open(path: &[u8], flags: u64) -> Result<i64, i64> {
+    // SAFETY: kernel reads the path via copyinstr.
+    call6(abi::SYS_OPEN, path.as_ptr() as u64, flags, 0, 0, 0, 0)
+}
+
+/// read(fd, buf) -> bytes read (0 == EOF).
+pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize, i64> {
+    // SAFETY: kernel writes exactly buf.len() user bytes on success.
+    call6(
+        abi::SYS_READ,
+        fd as u64,
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+        0,
+        0,
+        0,
+    )
+    .map(|n| n as usize)
+}
+
+pub fn close(fd: i32) -> Result<i64, i64> {
+    call6(abi::SYS_CLOSE, fd as u64, 0, 0, 0, 0, 0)
+}
+
+pub fn dup(fd: i32) -> Result<i64, i64> {
+    call6(abi::SYS_DUP, fd as u64, 0, 0, 0, 0, 0)
+}
+
+/// pipe(fds): fds[0] = read end, fds[1] = write end.
+pub fn pipe(fds: &mut [i32; 2]) -> Result<i64, i64> {
+    // SAFETY: kernel writes 8 bytes through fds.
+    call6(abi::SYS_PIPE, fds.as_mut_ptr() as u64, 0, 0, 0, 0, 0)
+}
+
+pub fn mknod(path: &[u8], major: u64, minor: u64) -> Result<i64, i64> {
+    // SAFETY: kernel reads the path via copyinstr.
+    call6(abi::SYS_MKNOD, path.as_ptr() as u64, major, minor, 0, 0, 0)
+}

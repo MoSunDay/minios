@@ -10,6 +10,7 @@ mod arch;
 mod console;
 mod drivers;
 mod fs;
+mod ipc;
 mod kernel;
 #[path = "lib/mod.rs"]
 mod klib;
@@ -87,6 +88,7 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
             drivers::block::ide::ideinit();
             fs::xv6fs::log::loginit(fs::xv6fs::layout::ROOTDEV);
             fs::xv6fs::iinit();
+            drivers::char::console::consoleinit();
             kernel::suite::run();
         }
         BootMode::Full => {

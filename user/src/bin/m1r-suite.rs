@@ -17,6 +17,32 @@ static mut CHILD_VEC: [f64; 4] = [-8.5, 7.25, -6.125, 5.0625];
 
 #[unsafe(no_mangle)]
 extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
+    // xv6 init.c: the first process owns the console — open it (mknod on
+    // first boot) and dup the descriptor onto stdin/stdout/stderr. Every
+    // later write(1, ...) goes fd table -> file -> devsw CONSOLE.
+    let console = b"/console\0";
+    let fd0 = match sys::open(console, abi::O_RDWR) {
+        Ok(fd) => fd as i32,
+        Err(_) => {
+            // First boot: create the device node, then open it.
+            if sys::mknod(console, 1, 1).is_err() {
+                sys::exit(-1);
+            }
+            match sys::open(console, abi::O_RDWR) {
+                Ok(fd) => fd as i32,
+                Err(_) => sys::exit(-1),
+            }
+        }
+    };
+    if fd0 != 0 {
+        // Not fd 0 (impossible as pid 1 with an empty table, but be exact).
+        let _ = sys::close(fd0);
+        sys::exit(-1);
+    }
+    if sys::dup(0).is_err() || sys::dup(0).is_err() {
+        sys::exit(-1);
+    }
+
     let mut total = 0u32;
     let mut failed = 0u32;
 
@@ -50,6 +76,18 @@ extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
     }
     total += 1;
     if !run_case("m1r.user.syscall_regs", case_syscall_regs) {
+        failed += 1;
+    }
+    total += 1;
+    if !run_case("m1r.user.open_read", case_open_read) {
+        failed += 1;
+    }
+    total += 1;
+    if !run_case("m1r.user.pipe", case_pipe) {
+        failed += 1;
+    }
+    total += 1;
+    if !run_case("m1r.user.dup_close", case_dup_close) {
         failed += 1;
     }
 
@@ -264,4 +302,75 @@ fn case_syscall_regs() -> bool {
             && r15 == 0x0fed_cba9_8765_4321) as u64;
     }
     ok == 1
+}
+
+/// S4d file syscalls: open the on-disk /m1r-suite (the very ELF this
+/// process runs from, packed by minios-mkfs), check the ELF magic and a
+/// full-block read, then close.
+fn case_open_read() -> bool {
+    let path = b"/m1r-suite\0";
+    let fd = match sys::open(path, abi::O_RDONLY) {
+        Ok(fd) => fd as i32,
+        Err(_) => return false,
+    };
+    let mut buf = [0u8; 512];
+    let n = match sys::read(fd, &mut buf) {
+        Ok(n) => n,
+        Err(_) => {
+            let _ = sys::close(fd);
+            return false;
+        }
+    };
+    let magic = n == 512 && buf[..4] == [0x7f, b'E', b'L', b'F'];
+    // A second read continues at offset 512 (shared file offset, readi
+    // through bmap): byte 512 must differ from byte 0 on a real ELF.
+    let more = match sys::read(fd, &mut buf) {
+        Ok(n) => n == 512,
+        Err(_) => false,
+    };
+    let cont = more && buf[0] != 0x7f;
+    let closed = sys::close(fd).is_ok();
+    // Reading through a closed fd must fail with EBADF.
+    let bad = matches!(sys::read(fd, &mut buf), Err(_));
+    magic && cont && closed && bad
+}
+
+/// S4d pipes: write one end, read the other, byte-exact round trip, then
+/// close the write end and observe EOF (read == 0).
+fn case_pipe() -> bool {
+    let mut fds = [0i32; 2];
+    if sys::pipe(&mut fds).is_err() {
+        return false;
+    }
+    let msg = b"pipe-ok";
+    if sys::write(fds[1], msg) != Ok(msg.len()) {
+        return false;
+    }
+    let mut buf = [0u8; 16];
+    match sys::read(fds[0], &mut buf) {
+        Ok(n) if n == msg.len() && &buf[..n] == msg => {}
+        _ => return false,
+    }
+    // Close the write end: the reader must see EOF (0 bytes).
+    if sys::close(fds[1]).is_err() {
+        return false;
+    }
+    let eof = matches!(sys::read(fds[0], &mut buf), Ok(0));
+    let closed = sys::close(fds[0]).is_ok();
+    eof && closed
+}
+
+/// S4d dup/close: a dup'ed stdout writes the same console bytes, and
+/// closing the dup leaves the original working.
+fn case_dup_close() -> bool {
+    let fd = match sys::dup(io::STDOUT) {
+        Ok(fd) => fd as i32,
+        Err(_) => return false,
+    };
+    let msg = b"m1r-user-dup-ok\n";
+    let a = sys::write(fd, msg) == Ok(msg.len());
+    let b = sys::close(fd).is_ok();
+    // The original descriptor must still work after closing the dup.
+    let c = sys::write(io::STDOUT, b"d\n") == Ok(2);
+    a && b && c
 }

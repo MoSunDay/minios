@@ -7,14 +7,16 @@
 
 use super::sysarg::SyscallArgs;
 use super::traps::Trapframe;
+use super::{sysfile, syspath};
 use crate::mm::uaccess;
 
-pub use abi::{EBADF, ECHILD, EINVAL, ENOENT, ENOSYS, ESRCH};
+pub use abi::{ECHILD, EINVAL, ENOENT, ENOSYS, ESRCH};
 
 /// Linux x86-64 syscall numbers (abi crate re-export for dispatch match).
 use abi::{
-    SYS_BRK, SYS_EXECVE, SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK, SYS_GETPID, SYS_KILL, SYS_WAIT4,
-    SYS_WRITE,
+    SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP, SYS_EXECVE, SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK,
+    SYS_FSTAT, SYS_GETPID, SYS_KILL, SYS_LINK, SYS_MKDIR, SYS_MKNOD, SYS_OPEN, SYS_PIPE, SYS_READ,
+    SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
 };
 
 /// C entry from the syscall stub (tf.rax = number, arg registers follow
@@ -22,7 +24,18 @@ use abi::{
 pub fn dispatch(tf: &mut Trapframe) -> i64 {
     let a = SyscallArgs::new(tf.rax, tf.rdi, tf.rsi, tf.rdx, tf.r10, tf.r8, tf.r9);
     match a.nr {
-        SYS_WRITE => sys_write(a.arg_usize(0), a.arg_usize(1), a.arg_usize(2)),
+        SYS_READ => sysfile::sys_read(a.arg_usize(0), a.arg_usize(1), a.arg64(2)),
+        SYS_WRITE => sysfile::sys_write(a.arg_usize(0), a.arg_usize(1), a.arg64(2)),
+        SYS_OPEN => syspath::sys_open(a.arg_usize(0), a.arg64(1)),
+        SYS_CLOSE => sysfile::sys_close(a.arg_usize(0)),
+        SYS_DUP => sysfile::sys_dup(a.arg_usize(0)),
+        SYS_PIPE => sysfile::sys_pipe(a.arg_usize(0)),
+        SYS_FSTAT => sysfile::sys_fstat(a.arg_usize(0), a.arg_usize(1)),
+        SYS_MKNOD => syspath::sys_mknod(a.arg_usize(0), a.arg64(1), a.arg64(2)),
+        SYS_MKDIR => syspath::sys_mkdir(a.arg_usize(0)),
+        SYS_CHDIR => syspath::sys_chdir(a.arg_usize(0)),
+        SYS_LINK => syspath::sys_link(a.arg_usize(0), a.arg_usize(1)),
+        SYS_UNLINK => syspath::sys_unlink(a.arg_usize(0)),
         SYS_BRK => sys_brk(a.arg64(0)),
         SYS_FORK => crate::proc::proc::fork() as i64,
         SYS_GETPID => sys_getpid(),
@@ -40,30 +53,6 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         }
         _ => ENOSYS,
     }
-}
-
-/// write(2) v1: fd 1/2 only, byte stream to the serial console; the buffer
-/// is a user pointer copied through the fixup-guarded copyin.
-fn sys_write(fd: usize, buf: usize, count: usize) -> i64 {
-    if fd != 1 && fd != 2 {
-        return EBADF;
-    }
-    let src = buf as *const u8;
-    let mut chunk = [0u8; 128];
-    let mut total = 0usize;
-    while total < count {
-        let n = core::cmp::min(chunk.len(), count - total);
-        // SAFETY: dst is a kernel stack buffer; a fault recovers as EFAULT.
-        let r = crate::mm::uaccess::copyin(chunk.as_mut_ptr(), src.wrapping_add(total), n);
-        if r != 0 {
-            return if total == 0 { r } else { total as i64 };
-        }
-        for &b in &chunk[..n] {
-            crate::arch::x86_64::console::write_byte(b);
-        }
-        total += n;
-    }
-    total as i64
 }
 
 /// brk(2): addr 0 queries the current break; otherwise grow/shrink to the

@@ -120,6 +120,10 @@ impl Default for Dirent {
 
 // ---- param.h (file-system subset; values per minios spec) ---------------
 
+/// Open files in the whole system (file.h NFILE).
+pub const NFILE: usize = 100;
+/// Console device major number (file.h CONSOLE).
+pub const CONSOLE: i16 = 1;
 /// Maximum number of active i-nodes (param.h NINODE).
 pub const NINODE: usize = 50;
 /// Size of disk block cache (param.h NBUF).
