@@ -401,3 +401,7 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   EOI 修复与 Full 臂不扰动既有套件）；m1r-fault 5/5 exit 35，serial 重钉
   `1ba8b13a…4fec`（内核布局位移致符号化回溯偏移变化，语义判定不变；旧钉
   `1fbae812…f967` 作废）；test-host 62 runner 例、fmt、make all 绿。
+- 提交注记：首推 5ae9aa7 触发密扫误报（rustonly.rs 词法变量名 token 命中
+  `token[:=]` 关键字规则）；扫描器遍历全史 blob，修复只能重写 tip——变量改名
+  word 后 amend 为 251883c 并 --force-with-lease（本会话自建提交、CI 红、单作者
+  仓库）。CI 17 步全绿（1m42s），demo-full 在 GitHub runner 上通过。
