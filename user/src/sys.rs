@@ -147,3 +147,74 @@ pub fn unlink(path: &[u8]) -> Result<i64, i64> {
     // SAFETY: kernel reads the path via copyinstr.
     call6(abi::SYS_UNLINK, path.as_ptr() as u64, 0, 0, 0, 0, 0)
 }
+
+/// link(2): create a new name for an existing file.
+pub fn link(old: &[u8], new: &[u8]) -> Result<i64, i64> {
+    // SAFETY: kernel reads both paths via copyinstr.
+    call6(
+        abi::SYS_LINK,
+        old.as_ptr() as u64,
+        new.as_ptr() as u64,
+        0,
+        0,
+        0,
+        0,
+    )
+}
+
+/// mkdir(2): create a directory.
+pub fn mkdir(path: &[u8]) -> Result<i64, i64> {
+    // SAFETY: kernel reads the path via copyinstr.
+    call6(abi::SYS_MKDIR, path.as_ptr() as u64, 0, 0, 0, 0, 0)
+}
+
+/// chdir(2): change the process working directory.
+pub fn chdir(path: &[u8]) -> Result<i64, i64> {
+    // SAFETY: kernel reads the path via copyinstr.
+    call6(abi::SYS_CHDIR, path.as_ptr() as u64, 0, 0, 0, 0, 0)
+}
+
+/// fstat(2): inode metadata for an open descriptor into `st`.
+pub fn fstat(fd: i32, st: &mut abi::Stat) -> Result<i64, i64> {
+    // SAFETY: kernel writes exactly size_of::<Stat>() bytes on success.
+    call6(
+        abi::SYS_FSTAT,
+        fd as u64,
+        st as *mut abi::Stat as u64,
+        0,
+        0,
+        0,
+        0,
+    )
+}
+
+/// stat(2) the xv6 way: open + fstat + close.
+pub fn stat(path: &[u8], st: &mut abi::Stat) -> Result<i64, i64> {
+    let fd = open(path, abi::O_RDONLY)?;
+    let r = fstat(fd as i32, st);
+    let _ = close(fd as i32);
+    r
+}
+
+/// sleep(n) in whole seconds (zombie.c semantics; the xv6 unit).
+pub fn sleep(seconds: u64) -> Result<i64, i64> {
+    let mut ts = [0u8; 16];
+    ts[0..8].copy_from_slice(&seconds.to_le_bytes());
+    // SAFETY: kernel reads the 16-byte timespec from user memory.
+    call6(abi::SYS_NANOSLEEP, ts.as_ptr() as u64, 0, 0, 0, 0, 0)
+}
+
+/// sbrk(n): move the break by `n`, returning the previous break address
+/// (0 = query without moving). xv6/umalloc's growth primitive over brk.
+pub fn sbrk(n: i64) -> Result<u64, i64> {
+    let cur = brk(0)?;
+    if n == 0 {
+        return Ok(cur);
+    }
+    let want = (cur as i64).wrapping_add(n);
+    if want < 0 {
+        return Err(abi::ENOMEM);
+    }
+    brk(want as u64)?;
+    Ok(cur)
+}

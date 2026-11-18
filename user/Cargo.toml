@@ -19,3 +19,61 @@ path = "src/bin/m1r-suite.rs"
 [[bin]]
 name = "m1r-exec-child"
 path = "src/bin/m1r-exec-child.rs"
+
+# S4e: the 15 xv6 user programs as Rust bins (usertests follows in the
+# next stage; 14 land here). Order = mkfs dirent order.
+[[bin]]
+name = "cat"
+path = "src/bin/cat.rs"
+
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"
+
+[[bin]]
+name = "forktest"
+path = "src/bin/forktest.rs"
+
+[[bin]]
+name = "grep"
+path = "src/bin/grep.rs"
+
+[[bin]]
+name = "init"
+path = "src/bin/init.rs"
+
+[[bin]]
+name = "kill"
+path = "src/bin/kill.rs"
+
+[[bin]]
+name = "ln"
+path = "src/bin/ln.rs"
+
+[[bin]]
+name = "ls"
+path = "src/bin/ls.rs"
+
+[[bin]]
+name = "mkdir"
+path = "src/bin/mkdir.rs"
+
+[[bin]]
+name = "rm"
+path = "src/bin/rm.rs"
+
+[[bin]]
+name = "sh"
+path = "src/bin/sh.rs"
+
+[[bin]]
+name = "stressfs"
+path = "src/bin/stressfs.rs"
+
+[[bin]]
+name = "wc"
+path = "src/bin/wc.rs"
+
+[[bin]]
+name = "zombie"
+path = "src/bin/zombie.rs"

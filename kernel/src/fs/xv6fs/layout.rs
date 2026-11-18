@@ -79,22 +79,9 @@ pub const T_DIR: i16 = 1; // Directory
 pub const T_FILE: i16 = 2; // File
 pub const T_DEV: i16 = 3; // Device
 
-/// `struct stat` (stat.h), as filled in by `stati()`.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-#[allow(dead_code)] // S4d: sys_fstat
-pub struct Stat {
-    /// Type of file.
-    pub type_: i16,
-    /// File system's disk device.
-    pub dev: i32,
-    /// Inode number.
-    pub ino: u32,
-    /// Number of links to file.
-    pub nlink: i16,
-    /// Size of file in bytes.
-    pub size: u32,
-}
+/// `struct stat` (stat.h), as filled in by `stati()` — shared with
+/// user-space decoding (S4e).
+pub use abi::Stat;
 
 // ---- directories (fs.h) --------------------------------------------------
 

@@ -14,6 +14,11 @@ pub mod mem;
 pub mod rt;
 pub mod sys;
 
+/// The M1R user heap (04 §3): brk-backed, allocation via the Rust `alloc`
+/// crate surface (`extern crate alloc` in the bins); free is a no-op.
+#[global_allocator]
+static HEAP: alloc::BrkAlloc = alloc::BRK_ALLOC;
+
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     // The word "panic" in serial output intentionally fails the suite

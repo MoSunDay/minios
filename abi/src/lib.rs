@@ -24,6 +24,7 @@ pub const SYS_MKDIR: u64 = 83;
 pub const SYS_CHDIR: u64 = 80;
 pub const SYS_LINK: u64 = 86;
 pub const SYS_UNLINK: u64 = 87;
+pub const SYS_NANOSLEEP: u64 = 35;
 pub const SYS_MKNOD: u64 = 133;
 pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;
@@ -76,3 +77,27 @@ pub const fn is_neg_errno(v: i64) -> bool {
 /// auxv keys (x86-64 ELF ABI). M1R exec seeds a minimal chain terminated
 /// by AT_NULL; richer keys arrive with later milestones.
 pub const AT_NULL: u64 = 0;
+
+/// fstat/stat result layout (the kernel's xv6 Stati snapshot, shared by
+/// the syscall surface so user programs decode the same bytes; repr(C),
+/// 20 bytes on x86-64).
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Default)]
+pub struct Stat {
+    /// Type of file (T_DIR=1, T_FILE=2, T_DEV=3).
+    pub type_: i16,
+    /// File system's disk device.
+    pub dev: i32,
+    /// Inode number.
+    pub ino: u32,
+    /// Number of links to file.
+    pub nlink: i16,
+    /// Size of file in bytes.
+    pub size: u32,
+}
+
+impl Stat {
+    pub const T_DIR: i16 = 1;
+    pub const T_FILE: i16 = 2;
+    pub const T_DEV: i16 = 3;
+}

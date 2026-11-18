@@ -300,3 +300,24 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   `9e66abf1…4536`（mknod console + elfcopy 创建/删除痕迹）；M0R `028048dd…92f1`
   字节不变；m1r-fault `1fbae812…f967` exit 35；test-host 6 组（runner 44 例）、
   fmt、make all 绿。
+
+2026-11-19 S4e-1 闭环（15 程序首批 14 个 + 用户堆 + nanosleep）：
+
+- 运行时：lib.rs 注册 #[global_allocator]（alloc.rs BrkAlloc，单线程 Sync 论证
+  在模块内）；sys.rs 补 link/mkdir/chdir/fstat/stat(open+fstat+close)/sleep/
+  sbrk(brk 包装)；io.rs 补 gets（单字节行读）/print_i64_fd。abi 新增
+  SYS_NANOSLEEP=35 与 #[repr(C)] Stat（kernel layout::Stat 改 re-export，用户态
+  与内核同源解码）。
+- 内核：sys_nanosleep（xv6 sys_sleep 循环：TICK_LOCK+ticks 通道，100Hz；EINVAL
+  界检查）；time.rs tick() 在 TICK_LOCK 下唤醒 ticks 通道（xv6 wakeup(&ticks)）。
+- 程序（xv6 语义，Rust no_std bins）：echo/cat/kill/mkdir/rm/ln/ls/wc/zombie/
+  forktest(N=NPROC=64+ECHILD)/grep(K&P 匹配器)/stressfs(5 进程链 5 文件)/
+  init(console 播种+sh 重启+孤儿收割)/sh（枚举 AST 递归下降：;|()<>>>、cd 内建、
+  最低 fd 重定向、后台不 wait）。usertests 随下一阶段。
+- mkfs：USER_ELFS 16 个 ELF（m1r-suite、m1r-exec-child + 14 程序；dirent 顺序=
+  列表序）；根目录 18 项仍一块（layout 文件数无关性成立），m1r.fs.blockread 检查
+  不变仅注释更新。
+- 证据（verdict: PASS，exit 33）：m1r-suite serial `6137aefd…e585`（20/20 不变）；
+  模板 `dff04779…4321`（16 ELF）；运行盘 `49d9ec0e…9860`；M0R `028048dd…92f1`
+  字节不变；m1r-fault exit 35；test-host、fmt、make all 绿（user-build 0 警告）。
+  sh.rs 376 行、ls.rs 122 行（≤400）。

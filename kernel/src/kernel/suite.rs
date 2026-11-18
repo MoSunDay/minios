@@ -204,8 +204,9 @@ fn case_fs_blockread() -> bool {
         let type_ = u16::from_le_bytes(d[b..b + 2].try_into().unwrap());
         let size = u32::from_le_bytes(d[b + 8..b + 12].try_into().unwrap());
         let addr0 = u32::from_le_bytes(d[b + 12..b + 16].try_into().unwrap());
-        // Root directory: 4 entries (., .., m1r-suite, m1r-exec-child),
-        // rounded to one block; first data block = 29.
+        // Root directory: ., .. and one dirent per embedded ELF (16
+        // files after S4e = 18 entries), still one block; first data
+        // block = 29 (the layout is file-count invariant up to here).
         good = good && type_ == T_DIR && size == 512 && addr0 == 29;
         brelse(ib);
         // First dirent pair sanity straight off the data block.

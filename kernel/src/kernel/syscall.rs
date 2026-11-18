@@ -16,8 +16,8 @@ pub use abi::{ECHILD, EINVAL, ENOENT, ENOSYS, ESRCH};
 /// Linux x86-64 syscall numbers (abi crate re-export for dispatch match).
 use abi::{
     SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP, SYS_EXECVE, SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK,
-    SYS_FSTAT, SYS_GETPID, SYS_KILL, SYS_LINK, SYS_MKDIR, SYS_MKNOD, SYS_OPEN, SYS_PIPE, SYS_READ,
-    SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
+    SYS_FSTAT, SYS_GETPID, SYS_KILL, SYS_LINK, SYS_MKDIR, SYS_MKNOD, SYS_NANOSLEEP, SYS_OPEN,
+    SYS_PIPE, SYS_READ, SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
 };
 
 /// C entry from the syscall stub (tf.rax = number, arg registers follow
@@ -37,6 +37,7 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         SYS_CHDIR => syspath::sys_chdir(a.arg_usize(0)),
         SYS_LINK => syspath::sys_link(a.arg_usize(0), a.arg_usize(1)),
         SYS_UNLINK => syspath::sys_unlink(a.arg_usize(0)),
+        SYS_NANOSLEEP => sys_nanosleep(a.arg_usize(0)),
         SYS_BRK => sys_brk(a.arg64(0)),
         SYS_FORK => crate::proc::proc::fork() as i64,
         SYS_GETPID => sys_getpid(),
@@ -182,5 +183,42 @@ fn sys_execve(tf: &mut Trapframe, path: usize, argv: usize) -> i64 {
     r.map_or_else(|e| e, |()| 0)
 }
 
-/// Timer hook (S3 nanosleep bookkeeping); no-op until the suite lands.
+/// Timer hook (S3 bookkeeping); sleep wakeups live in time::tick.
 pub fn on_tick(_now: u64) {}
+
+/// nanosleep(2) (Linux x86-64 ABI 35): park on the ticks channel until
+/// the deadline passes (xv6 sys_sleep loop against tickslock). No signal
+/// delivery exists in M1R, so the return is always 0 on success.
+fn sys_nanosleep(req: usize) -> i64 {
+    let mut ts = [0u8; 16];
+    match uaccess::copyin(ts.as_mut_ptr(), req as *const u8, 16) {
+        0 => {}
+        e => return e,
+    }
+    let sec = i64::from_le_bytes(ts[0..8].try_into().unwrap());
+    let nsec = i64::from_le_bytes(ts[8..16].try_into().unwrap());
+    if nsec < 0 || nsec >= 1_000_000_000 || sec < 0 {
+        return EINVAL;
+    }
+    // 100 Hz PIT: whole ticks, at least one for any nonzero request.
+    let dur = (sec as u64) * 100 + (nsec as u64) / 10_000_000;
+    let deadline = crate::kernel::time::ticks() + dur.max(1);
+    // SAFETY: balanced TICK_LOCK acquire/release around each sleep; the
+    // channel is woken from the timer interrupt under the same lock.
+    unsafe {
+        loop {
+            crate::kernel::time::TICK_LOCK.raw_lock();
+            if crate::kernel::time::ticks() >= deadline {
+                crate::kernel::time::TICK_LOCK.raw_release();
+                break;
+            }
+            crate::proc::sleep::sleep(
+                crate::kernel::time::ticks_chan(),
+                &crate::kernel::time::TICK_LOCK,
+            );
+            // SAFETY: sleep returns with TICK_LOCK held.
+            crate::kernel::time::TICK_LOCK.raw_release();
+        }
+    }
+    0
+}

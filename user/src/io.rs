@@ -68,3 +68,53 @@ pub fn print_hex(value: u64) -> bool {
     }
     write_all(STDOUT, b"0x") && write_all(STDOUT, &digits[i..])
 }
+
+/// gets() the xv6 way (ulib.c): read one byte at a time from `fd` into
+/// `buf` until newline or EOF; NUL-terminates (newline kept, like xv6).
+/// Returns the line length without the NUL, or None on immediate EOF.
+pub fn gets(fd: i32, buf: &mut [u8]) -> Option<usize> {
+    let mut n = 0usize;
+    while n < buf.len() - 1 {
+        let mut one = [0u8; 1];
+        match sys::read(fd, &mut one) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+        buf[n] = one[0];
+        n += 1;
+        if one[0] == b'\n' {
+            break;
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    buf[n] = 0;
+    Some(n)
+}
+
+/// Signed decimal print to `fd` (printf %d).
+pub fn print_i64_fd(fd: i32, value: i64) -> bool {
+    let (neg, mag) = if value < 0 {
+        (true, (value as i128).unsigned_abs() as u128)
+    } else {
+        (false, value as u128)
+    };
+    let mut digits = [0u8; 21];
+    let mut i = digits.len();
+    let mut v = mag;
+    loop {
+        i -= 1;
+        digits[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    if neg {
+        i -= 1;
+        digits[i] = b'-';
+    }
+    write_all(fd, &digits[i..])
+}

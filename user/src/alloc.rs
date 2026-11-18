@@ -14,6 +14,11 @@ pub const BRK_ALLOC: BrkAlloc = BrkAlloc {
     break_hint: Cell::new(0),
 };
 
+// SAFETY: M1R userland is single-threaded (no threads yet; fork copies
+// the address space rather than sharing it), so the Cell hint cannot
+// race. The static registration below requires Sync.
+unsafe impl Sync for BrkAlloc {}
+
 impl BrkAlloc {
     fn current_break(&self) -> u64 {
         let cached = self.break_hint.get();

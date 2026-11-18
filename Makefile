@@ -33,7 +33,14 @@ M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
 # kernel-scoped (04 §2). MINIOS_USER_IMG_DIR feeds kernel/build.rs.
 USER_TARGET := $(CURDIR)/target-user
 USER_RELEASE := $(USER_TARGET)/x86_64-unknown-linux-gnu/release
-USER_ELFS := $(USER_RELEASE)/m1r-suite $(USER_RELEASE)/m1r-exec-child
+# S4e: the xv6 program set rides the root image (dirent order = this
+# list; usertests joins when its suite lands).
+USER_ELFS := $(USER_RELEASE)/m1r-suite $(USER_RELEASE)/m1r-exec-child \
+  $(USER_RELEASE)/cat $(USER_RELEASE)/echo $(USER_RELEASE)/forktest \
+  $(USER_RELEASE)/grep $(USER_RELEASE)/init $(USER_RELEASE)/kill \
+  $(USER_RELEASE)/ln $(USER_RELEASE)/ls $(USER_RELEASE)/mkdir \
+  $(USER_RELEASE)/rm $(USER_RELEASE)/sh $(USER_RELEASE)/stressfs \
+  $(USER_RELEASE)/wc $(USER_RELEASE)/zombie
 export MINIOS_USER_IMG_DIR := $(USER_RELEASE)
 # rust-lld speaks GNU-ld when invoked as ld.lld (argv[0] flavor); the
 # symlink below is pure invocation plumbing, still the toolchain lld.
