@@ -11,13 +11,14 @@ use super::traps::Trapframe;
 use super::{sysfile, syspath};
 use crate::mm::uaccess;
 
-pub use abi::{ECHILD, EINTR, EINVAL, ENOENT, ENOSYS, ESRCH};
+pub use abi::{ECHILD, EINTR, EINVAL, ENOENT, ENOMEM, ENOSYS, ESRCH};
 
 /// Linux x86-64 syscall numbers (abi crate re-export for dispatch match).
 use abi::{
-    SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP, SYS_EXECVE, SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK,
-    SYS_FSTAT, SYS_GETPID, SYS_KILL, SYS_LINK, SYS_MKDIR, SYS_MKNOD, SYS_NANOSLEEP, SYS_OPEN,
-    SYS_PIPE, SYS_READ, SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP, SYS_EXECVE,
+    SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK, SYS_FSTAT, SYS_GETPID, SYS_KILL, SYS_LINK, SYS_MKDIR,
+    SYS_MKNOD, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_PIPE, SYS_READ,
+    SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
 };
 
 /// C entry from the syscall stub (tf.rax = number, arg registers follow
@@ -39,6 +40,16 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         SYS_UNLINK => syspath::sys_unlink(a.arg_usize(0)),
         SYS_NANOSLEEP => sys_nanosleep(a.arg_usize(0)),
         SYS_BRK => sys_brk(a.arg64(0)),
+        SYS_MMAP => sys_mmap(
+            a.arg_usize(0),
+            a.arg_usize(1),
+            a.arg64(2) as i64,
+            a.arg64(3) as i64,
+            a.arg64(4) as i64,
+            a.arg64(5) as i64,
+        ),
+        SYS_MUNMAP => sys_munmap(a.arg_usize(0), a.arg_usize(1)),
+        SYS_MPROTECT => sys_mprotect(a.arg_usize(0), a.arg_usize(1), a.arg64(2) as i64),
         SYS_FORK => crate::proc::proc::fork() as i64,
         SYS_GETPID => sys_getpid(),
         SYS_EXECVE => sys_execve(tf, a.arg_usize(0), a.arg_usize(1)),
@@ -58,32 +69,101 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
     }
 }
 
-/// brk(2): addr 0 queries the current break; otherwise grow/shrink to the
-/// page-rounded addr, returning the new break or the old one on failure.
+/// brk(2): addr 0 queries the current break; otherwise move it to the
+/// byte-exact addr, returning the new break or the old one on failure.
 fn sys_brk(addr: u64) -> i64 {
-    // Sanity ceiling mirroring proc::growproc's HEAP_LIMIT (0x1000_0000_0000).
-    const HEAP_LIMIT: u64 = 0x0000_1000_0000_0000;
     let p = crate::proc::proc::myproc();
     if p.is_null() {
         return 0;
     }
     // SAFETY: myproc() is the running (or seeded) process.
-    let old = unsafe { (*p).mm.as_ref().map_or(0, |m| m.sz) } as i64;
+    let mm = match unsafe { (*p).mm.as_mut() } {
+        Some(m) => m,
+        None => return 0,
+    };
     if addr == 0 {
-        return old;
+        return mm.brk as i64;
     }
-    if addr >= HEAP_LIMIT {
-        return old;
+    mm.set_brk(addr as usize) as i64
+}
+
+/// mmap(2) M2 anonymous subset: MAP_ANONYMOUS|MAP_PRIVATE only (fd
+/// ignored, offset must be 0); addr 0 places top-down, MAP_FIXED pins.
+/// Returns the mapping start or -errno.
+fn sys_mmap(addr: usize, len: usize, prot: i64, flags: i64, _fd: i64, off: i64) -> i64 {
+    const FLAG_BITS: i64 = (MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED) as i64;
+    const PROT_BITS: i64 = (abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC) as i64;
+    if flags & (MAP_PRIVATE as i64) == 0 || flags & (MAP_ANONYMOUS as i64) == 0 {
+        return EINVAL;
     }
-    let want = addr as i64;
-    if want == old {
-        return old;
+    if (flags & !FLAG_BITS) != 0 {
+        return EINVAL;
     }
-    let r = crate::proc::proc::growproc(want - old);
-    if r as i64 == want {
-        want
+    if off != 0 {
+        return EINVAL;
+    }
+    if (prot & !PROT_BITS) != 0 {
+        return EINVAL;
+    }
+    let p = crate::proc::proc::myproc();
+    if p.is_null() {
+        return ENOMEM;
+    }
+    let kprot = (prot & PROT_BITS) as u32;
+    // vma.rs PROT_* bit values match the abi's (1, 2, 4).
+    let fixed = flags & (MAP_FIXED as i64) != 0;
+    // SAFETY: myproc() is the running process.
+    let r = match unsafe { (*p).mm.as_mut() } {
+        Some(mm) => mm.mmap_anon(addr, len, kprot, fixed),
+        None => 0,
+    };
+    if r == 0 {
+        ENOMEM
     } else {
-        old
+        r as i64
+    }
+}
+
+/// munmap(2): anonymous mappings only (M2 minimal set); 0 or -errno.
+fn sys_munmap(addr: usize, len: usize) -> i64 {
+    let p = crate::proc::proc::myproc();
+    if p.is_null() {
+        return EINVAL;
+    }
+    // SAFETY: myproc() is the running process.
+    match unsafe { (*p).mm.as_mut() } {
+        Some(mm) => {
+            if mm.munmap(addr, len) {
+                0
+            } else {
+                EINVAL
+            }
+        }
+        None => EINVAL,
+    }
+}
+
+/// mprotect(2): 0 or -errno (EINVAL on bad prot, ENOMEM on holes).
+fn sys_mprotect(addr: usize, len: usize, prot: i64) -> i64 {
+    const PROT_BITS: i64 = (abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC) as i64;
+    if (prot & !PROT_BITS) != 0 {
+        return EINVAL;
+    }
+    let kprot = (prot & PROT_BITS) as u32;
+    let p = crate::proc::proc::myproc();
+    if p.is_null() {
+        return EINVAL;
+    }
+    // SAFETY: myproc() is the running process.
+    match unsafe { (*p).mm.as_mut() } {
+        Some(mm) => {
+            if mm.mprotect(addr, len, kprot) {
+                0
+            } else {
+                ENOMEM
+            }
+        }
+        None => ENOMEM,
     }
 }
 

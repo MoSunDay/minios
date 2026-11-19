@@ -29,6 +29,21 @@ pub const SYS_MKNOD: u64 = 133;
 pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;
 pub const SYS_EXIT_GROUP: u64 = 231;
+pub const SYS_MMAP: u64 = 9;
+pub const SYS_MPROTECT: u64 = 10;
+pub const SYS_MUNMAP: u64 = 11;
+
+/// mmap(2) protections (x86-64 values, shared by the kernel VMA model).
+pub const PROT_NONE: u64 = 0;
+pub const PROT_READ: u64 = 1;
+pub const PROT_WRITE: u64 = 1 << 1;
+pub const PROT_EXEC: u64 = 1 << 2;
+
+/// mmap(2) flags (x86-64 values, M2 anonymous subset).
+pub const MAP_SHARED: u64 = 0x01;
+pub const MAP_PRIVATE: u64 = 0x02;
+pub const MAP_FIXED: u64 = 0x10;
+pub const MAP_ANONYMOUS: u64 = 0x20;
 
 /// errno values (asm-generic errno-base.h) used by the M1R whitelist.
 pub const EPERM: i64 = -1;

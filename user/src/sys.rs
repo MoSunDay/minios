@@ -99,6 +99,41 @@ pub fn brk(addr: u64) -> Result<u64, i64> {
     call6(abi::SYS_BRK, addr, 0, 0, 0, 0, 0).map(|v| v as u64)
 }
 
+/// mmap(addr, len, prot, flags, fd, off): M2 anonymous subset. addr 0
+/// asks for top-down placement; returns the mapping start.
+pub fn mmap(
+    addr: usize,
+    len: usize,
+    prot: u64,
+    flags: u64,
+    fd: i64,
+    off: u64,
+) -> Result<usize, i64> {
+    // SAFETY: plain register plumbing.
+    call6(
+        abi::SYS_MMAP,
+        addr as u64,
+        len as u64,
+        prot,
+        flags,
+        fd as u64,
+        off,
+    )
+    .map(|v| v as usize)
+}
+
+/// munmap(addr, len): anonymous mappings only in M2.
+pub fn munmap(addr: usize, len: usize) -> Result<i64, i64> {
+    // SAFETY: plain register plumbing.
+    call6(abi::SYS_MUNMAP, addr as u64, len as u64, 0, 0, 0, 0)
+}
+
+/// mprotect(addr, len, prot).
+pub fn mprotect(addr: usize, len: usize, prot: u64) -> Result<i64, i64> {
+    // SAFETY: plain register plumbing.
+    call6(abi::SYS_MPROTECT, addr as u64, len as u64, prot, 0, 0, 0)
+}
+
 pub fn kill(pid: i32) -> Result<i64, i64> {
     call6(abi::SYS_KILL, pid as u64, 0, 0, 0, 0, 0)
 }

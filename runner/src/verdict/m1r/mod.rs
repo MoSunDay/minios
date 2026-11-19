@@ -44,9 +44,11 @@ pub fn m1r_suite_spec() -> SuiteSpec {
     }
 }
 
-/// m1r-user v1 (S4e-2): the xv6 usertests battery as its own boot round
-/// (pid 1 = /usertests; no kernel-phase cases, PASS exit 33 under the
-/// suite=m1r-user marker). Case ids mirror user/src/utest CASES in order.
+/// m1r-user battery (S4e-2 frozen 35; m2r-s4 grows it with the three M2
+/// mem cases): the xv6 usertests port as its own boot round (pid 1 =
+/// /usertests; PASS exit 33 under the suite=m1r-user marker). Case ids
+/// mirror user/src/utest CASES in order; the manifest's due set (rank <=
+/// the round's milestone) must equal this list exactly.
 pub fn m1r_user_spec() -> SuiteSpec {
     SuiteSpec {
         suite: "m1r-user",
@@ -54,6 +56,9 @@ pub fn m1r_user_spec() -> SuiteSpec {
         expected_cases: &[
             "xv6.mem.bsstest",
             "xv6.mem.sbrk",
+            "xv6.mem.mmap",
+            "xv6.mem.munmap",
+            "xv6.mem.cow",
             "xv6.fs.opentest",
             "xv6.fs.writetest",
             "xv6.fs.writetest1",

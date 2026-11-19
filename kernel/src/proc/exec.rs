@@ -10,13 +10,17 @@ use super::Proc;
 use crate::arch::x86_64::io;
 use crate::kernel::traps::Trapframe;
 use crate::mm::frame::{kalloc, kfree, p2v, v2p, PGSIZE};
+use crate::mm::mmap::prot_to_pte;
 use crate::mm::pgtable::{self, PTE_NX, PTE_P};
 use crate::mm::vm::{Mm, USER_STACK_PAGES, USER_STACK_TOP};
+use crate::mm::vma;
 
 const ET_EXEC: u16 = 2;
 const EM_X86_64: u16 = 62;
 const PT_LOAD: u32 = 1;
 const PF_X: u32 = 1;
+const PF_W: u32 = 2;
+const PF_R: u32 = 4;
 const EHDR_SIZE: usize = 64;
 const PHDR_SIZE: usize = 56;
 
@@ -100,26 +104,6 @@ unsafe fn write_user(pml4: pgtable::PtPtr, va: usize, src: &[u8]) {
             core::ptr::copy_nonoverlapping(src[off..].as_ptr(), (base + in_page) as *mut u8, n);
         }
         off += n;
-    }
-}
-
-/// Set/clear NX across [va, va+size) leaf PTEs.
-///
-/// # Safety
-/// range mapped in pml4.
-unsafe fn set_nx(pml4: pgtable::PtPtr, va: usize, size: usize, on: bool) {
-    let mut a = pgtable::pgrounddown(va);
-    let end = pgtable::pgroundup(va + size);
-    while a < end {
-        let pte = pgtable::walk(pml4, a, false);
-        if !pte.is_null() && (*pte & PTE_P) != 0 {
-            if on {
-                *pte |= PTE_NX;
-            } else {
-                *pte &= !PTE_NX;
-            }
-        }
-        a += PGSIZE;
     }
 }
 
@@ -302,9 +286,33 @@ pub unsafe fn exec_elf(
             new_mm.free();
             return Err(ENOEXEC);
         }
-        if new_mm.alloc(cursor, end) == 0 {
+        // Segment permissions (PF_* -> PROT_*): pages arrive with their
+        // final PTE bits (W off for text/rodata, NX on for non-code).
+        let mut prot = vma::PROT_NONE;
+        if flags & PF_R as usize != 0 {
+            prot |= vma::PROT_R;
+        }
+        if flags & PF_W as usize != 0 {
+            prot |= vma::PROT_W;
+        }
+        if flags & PF_X as usize != 0 {
+            prot |= vma::PROT_X;
+        }
+        if prot == vma::PROT_NONE {
+            prot |= vma::PROT_R;
+        }
+        if new_mm.alloc(cursor, end, prot_to_pte(prot)) == 0 {
             new_mm.free();
             return Err(ENOMEM);
+        }
+        if !new_mm.vmas.insert(vma::Vma {
+            start: cursor,
+            end,
+            prot,
+            flags: 0,
+        }) {
+            new_mm.free();
+            return Err(ENOEXEC);
         }
         cursor = end;
         // Stream the file bytes to their pages through a bounce buffer
@@ -322,13 +330,13 @@ pub unsafe fn exec_elf(
             unsafe { write_user(new_mm.pml4, vaddr + done, &bounce[..n as usize]) };
             done += n as usize;
         }
-        // Data segments non-executable; code segments executable.
-        unsafe { set_nx(new_mm.pml4, vaddr, memsz, (flags & PF_X as usize) == 0) };
         if end > max_end {
             max_end = end;
         }
     }
-    new_mm.sz = max_end;
+    // Initial break: page-aligned right above the last segment; the
+    // heap VMA appears with the first brk growth.
+    new_mm.brk = max_end;
 
     let rsp = match unsafe { build_stack(new_mm.pml4, argv) } {
         Ok(sp) => sp,
@@ -337,6 +345,16 @@ pub unsafe fn exec_elf(
             return Err(e);
         }
     };
+    // Stack VMA (grows down from USER_STACK_TOP from s5 on).
+    if !new_mm.vmas.insert(vma::Vma {
+        start: USER_STACK_TOP - USER_STACK_PAGES * PGSIZE,
+        end: USER_STACK_TOP,
+        prot: vma::PROT_RW,
+        flags: vma::VMA_STACK,
+    }) {
+        new_mm.free();
+        return Err(ENOEXEC);
+    }
 
     // Commit: swap the address space, then free the old one through the
     // direct map (safe even if it was the active CR3 a moment ago).

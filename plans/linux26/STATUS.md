@@ -459,3 +459,40 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   m2 9/9）。钉值：m0r/m1r-suite/m1r-user 串口与 root 字节不变；
   **m1r-fault 串口重钉 `6a875ab4…4ef2`（root `de5b494a…c61a`）**——vma 模块入链致
   符号位移（rust_main+0x1152），verdict 仍 5/5 PASS（40 §6 按 S4e-4 先例记录）。
+
+### m2r-s4（brk/mmap/munmap/mprotect 全链，2026-11-19）
+
+- 交付：`abi`（SYS_MMAP/MPROTECT/MUNMAP=9/10/11 + PROT_*/MAP_*）；`kernel/src/mm/
+  vm.rs` 重写为 `Mm{pml4,vmas,brk}`——alloc/dealloc 全 PTE 位（mappages 仅补
+  PTE_P）、字节精确 set_brk（heap_floor 下界 + HEAP_LIMIT 上界 + 堆 VMA 同步）、
+  free/copy（fork 纯复制）、map_zero_page（s5 惰性填零原语）；`kernel/src/mm/
+  mmap.rs`（新 164 行）——prot_to_pte（P|U，无 PROT_X 即 NX）、mmap_anon
+  （顶向选址/MAP_FIXED/PROT_NONE 仅保留地址空间/OOM 回滚 VMA 表）、munmap
+  （仅匿名/全覆盖/释放帧+invlpg）、mprotect（set_prot 分裂重合并 + PTE 重授权，
+  PROT_NONE 去 U 保留驻留）；`proc/exec.rs` 段映射按 ELF PF 位忠实授权（text
+  无 W 非 NX、data W+NX）并插入段/栈 VMA，`new_mm.brk=max_end`；
+  `kernel/syscall.rs` sys_brk/mmap/munmap/mprotect（EINVAL/ENOMEM 语义），
+  growproc 删除。用户侧：`user/src/sys.rs` 三绑定 + `utest/mem.rs` 三例
+  （mmap 顶向不重叠+零填+读写+munmap；munmap 后触访子进程被杀+栈拒绝；
+  fork 静态页 COW 隔离——s6 升级真 COW）。
+- 套件：m1r-user 35→38（xv6.mem.mmap/munmap/cow，CASE 序插 sbrk 后）；runner
+  m1r spec/tests 同步；coverage 完整性过滤改为 rank≤milestone（Makefile 传
+  `--milestone M2`）；m2 内核套件 9→12（m2.vma.layout 布局+brk 周期+帧守恒、
+  m2.mmap.eager 顶向/零填/PROT_NONE/munmap 帧精确、m2.mprotect.perm 全授权
+  矩阵+驻留数据存活+洞拒绝）。
+- 修复（本阶段内闭环，QEMU 实测定位）：① set_brk 增长 perm 漏 PTE_U（mappages
+  仅 OR PTE_P）→ m1r.user.brk 触访新堆页 ec=0x7 被杀、驱动带崩整个 m1r 套件
+  ——补 P|U|W|NX；② `free_user_pml4` 只走 3 层（把 PT 页当数据页释放、叶 PTE
+  从不访问）→ 每次进程退出泄漏全部用户数据页（M1R 无帧守恒未暴露）——补第 4
+  层循环，数据页/PT/PD/PDPT/PML4 全量回收；③ m2 两例帧计数未计表开销
+  （pml4+pdpt+pd+pt=4）——按确定性拓扑改 8/−8/−5/−6。
+- gate：make all/test/fmt-check/check-rust-only 绿（host-tests 38 + runner 67 +
+  tools 5，m2 self-test 标记变更 total=12 同步）；QEMU 全电池 PASS：m0r 6/6、
+  m1r 20/20、**m1r-user 38/38 + coverage active=38 not-active=1（M2 里程碑激活）**、
+  m1r-fault 5/5、m2 12/12。
+- 钉值：m0r `028048dd…20f1` 与 m1r-suite `6137aefd…e585` 串口字节不变
+  （注：历史条目尾码 `…92f1` 为转写笔误，权威全值见 results/s0-m1r-green/
+  hashes.txt）；**m1r-user 重钉 serial `b0f5743f…a2c6` / root `9c0f9f98…5f32`、
+  m1r-fault 重钉 serial `e531a032…64f7` / root `a44075ba…cea0`**（usertests
+  +3 例改 root 模板 + mm 重写致符号位移）；m2-suite serial 首钉
+  `e9cb4531…a419`。

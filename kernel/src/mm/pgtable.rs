@@ -157,11 +157,19 @@ pub unsafe fn free_user_pml4(pml4: PtPtr) {
                 }
                 let pd = p2v((pde & PTE_ADDR) as usize) as PtPtr;
                 for k in 0..NPTENTRIES {
-                    let pte = (*entries(pd))[k];
-                    if pte & PTE_P == 0 {
+                    let pde2 = (*entries(pd))[k];
+                    if pde2 & PTE_P == 0 {
                         continue;
                     }
-                    kfree(p2v((pte & PTE_ADDR) as usize) as *mut u8);
+                    let pt = p2v((pde2 & PTE_ADDR) as usize) as PtPtr;
+                    for l in 0..NPTENTRIES {
+                        let pte = (*entries(pt))[l];
+                        if pte & PTE_P == 0 {
+                            continue;
+                        }
+                        kfree(p2v((pte & PTE_ADDR) as usize) as *mut u8);
+                    }
+                    kfree(pt as *mut u8);
                 }
                 kfree(pd as *mut u8);
             }

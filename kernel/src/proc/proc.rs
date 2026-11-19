@@ -301,37 +301,6 @@ pub fn kill_cur_on_fault() -> ! {
     exit(-1)
 }
 
-/// Grow the process heap by `n` (brk); returns the old break or 0 on error.
-pub fn growproc(n: i64) -> usize {
-    // SAFETY: process context.
-    let p = myproc();
-    let proc = unsafe { &mut *p };
-    let mm = match proc.mm.as_mut() {
-        Some(mm) => mm,
-        None => return 0,
-    };
-    let old = mm.sz;
-    let new = if n >= 0 {
-        old.saturating_add(n as usize)
-    } else {
-        old.saturating_sub((-n) as usize)
-    };
-    // Keep the heap far below the user stack region.
-    const HEAP_LIMIT: usize = 0x0000_1000_0000_0000;
-    if new > HEAP_LIMIT {
-        return 0;
-    }
-    if n >= 0 {
-        if mm.alloc(old, new) == 0 {
-            return 0;
-        }
-    } else if mm.dealloc(old, new) == 0 {
-        return 0;
-    }
-    mm.sz = new;
-    new
-}
-
 /// First user process: exec `image` as pid 1 named "init" (BootMode::Full).
 pub fn userinit(image: &[u8]) -> bool {
     userinit_named(image, b"init", &[b"init"])

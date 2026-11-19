@@ -406,8 +406,10 @@ fn cmd_coverage(args: &[String]) -> i32 {
             return 1;
         }
     };
-    // Manifest/spec integrity: the manifest's M1R m1r-user entries must be
-    // exactly the frozen battery in m1r_user_spec() (no silent drift).
+    // Manifest/spec integrity: the manifest's due (rank <= this round's
+    // milestone) run-m1r-user entries must be exactly the battery in
+    // m1r_user_spec() (no silent drift; the battery grows per milestone).
+    let now_rank = coverage::milestone_rank(&milestone).expect("validated above");
     let spec_set: std::collections::BTreeSet<&str> = verdict::m1r_user_spec()
         .expected_cases
         .iter()
@@ -415,7 +417,10 @@ fn cmd_coverage(args: &[String]) -> i32 {
         .collect();
     let manifest_due: std::collections::BTreeSet<&str> = specs
         .iter()
-        .filter(|c| c.milestone == "M1R")
+        .filter(|c| {
+            c.runner_test_name.starts_with("run-m1r-user::")
+                && coverage::milestone_rank(&c.milestone).map_or(false, |r| r <= now_rank)
+        })
         .map(|c| c.case_id.as_str())
         .collect();
     if spec_set != manifest_due {

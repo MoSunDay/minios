@@ -80,6 +80,7 @@ const EMPTY: Vma = Vma {
 /// neighbors share (prot, flags); count <= NVMA. Heap VMAs may be
 /// byte-unaligned at either edge after splits (the brk is byte-exact).
 #[allow(dead_code)] // s4 mm wiring consumes the VMA core
+#[derive(Clone, Copy)]
 pub struct VmaTable {
     pub vmas: [Vma; NVMA],
     pub count: usize,
