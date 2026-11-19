@@ -19,7 +19,7 @@
 |--------|----------|------|---------------|
 | M0R | 工具锁、Multiboot1/ELF64、长模式、高半区、真实 QEMU smoke、CI workflow | 🟢 **done**（2026-11-16 判绿） | 净树 HEAD `4c22b7b` 全套 exit 0 + 三组 sha256 + CI 首跑 success：https://github.com/MoSunDay/minios/actions/runs/43886738739 |
 | M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟢 **done**（2026-11-19 判绿） | 净树 HEAD `ef2a335` 电池 9 步 EXIT0（smoke/m1r-suite/m1r-user 35+coverage/m1r-fault/demo-full，serial 钉值 `028048dd…`/`6137aefd…`/`0c39a3e5…`/`1ba8b13a…` 全复现）；CI run 44381221846 success；详见文末 M1R 判绿收口 |
-| M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | ⬜ pending | 等 M1R 全绿 |
+| M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | 🟡 **物理页基础已交付**（m2r-s1/s2，2026-11-19） | bootmem/buddy(双 zone)/directmap/SLUB/vmalloc+ioremap + m2 内核套件 9/9（`make test-qemu-m2`，exit 33）；host 26 例纯核单测；CI 接线；证据见文末 m2r 记录；匿名 VMA/brk/mmap/COW 待做 |
 | M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE | ⬜ pending | 等 M2 全绿 |
 | M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | ⬜ pending | 等 M3 全绿 |
 | M5 | 第二盘 ext4 RO 与 host/guest 黄金清单 | ⬜ pending | 等 M4 全绿；M5 起启用 host ext4 管线 |
@@ -422,3 +422,22 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   https://github.com/MoSunDay/minios/actions/runs/44381221846
 - 判定：M0R 冻结面未被扰动（smoke 串口字节不变），M1R 全部到期 gate 于同一净树
   commit 本地 + CI 双绿 → **M1R 🟢**。下一步 M2（物理页基础设施起步）。
+
+## m2r 记录（2026-11-19，S1+S2）
+
+- m2r-s1（内核侧）：mm/bootmem（loader map 消毒：排序/去交/可用表 + 探测顶）、
+  mm/buddy（DMA/NORMAL 双 zone，order 0..10，整块分配/合并归还）、mm/slub（11 级
+  kmalloc/kfree）、mm/directmap（boot PML4[510] 自 boot.S 256MiB 预映射扩至探测顶）、
+  mm/vmalloc+ioremap（0xffff_9000_0000_0000 @ PML4[288] 共享入用户 PML4；常驻 PT 页；
+  vmap 调用方页；MMIO RW-NX 精确 PA 位、RAM 拒绝）；frame::init 前先记 CR3。
+  关键修复：console VGA 改走直接映射 —— 旧高半区别名 0xffffffff800b8000 实际落在
+  内核 .data（高半区映射的是 phys base 0x500000 而非 phys 0），每次打印都以
+  (char,0x0f) VGA 对覆写 MEM_MAP（现象：边界随打印量漂移的 .data 损坏）。
+- m2r-s2（接线）：host-tests 纯核单测 26 例（bootmem/buddy/slub）；runner m2 verdict
+  + Suite::M2Suite（needs_root=false，config_id=CORE-UP-GRUB）；Makefile
+  `test-qemu-m2`（`-m 256M` + isa-debug-exit，PASS 印
+  `MINIOS_X86_64_TEST_PASS_V1 suite=m2 run=core-up total=9`）；ci.yml 增步 +
+  artifact 上传 target/m2-suite-run。
+- 证据（净树工作树 = 已验证 scratch 树，patcher 逐字节复现）：m2 套件 9/9
+  PASS（zones DMA=2261 NORMAL=61408）；m0r/m1r-suite/m1r-fault/m1r-user serial
+  钉值全部不变；make all/test/fmt-check 绿。CI 待本次 push 后确认。

@@ -106,6 +106,9 @@ jobs:
       - name: "Real QEMU m1r-fault (expected-fault suite, exit 35)"
         run: make test-expected-fault
 
+      - name: "Real QEMU m2-suite (kernel-only physical-page foundation, exit 33)"
+        run: make test-qemu-m2
+
       - name: "BootMode::Full demo (init -> sh interactive serial session)"
         run: make demo-full
 
@@ -121,6 +124,7 @@ jobs:
             target/m1r-suite-run
             target/m1r-user-run
             target/m1r-fault-run
+            target/m2-suite-run
             target/full-run
             results/m1r-user
           if-no-files-found: error

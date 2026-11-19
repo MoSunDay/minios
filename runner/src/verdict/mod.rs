@@ -6,11 +6,13 @@
 
 mod m0r;
 mod m1r;
+mod m2;
 
 pub use m0r::m0r_spec;
 pub use m1r::{
     judge_fault, m1r_fault_spec, m1r_suite_spec, m1r_user_spec, EXPECTED_FAULT_EXIT_CODE,
 };
+pub use m2::m2_suite_spec;
 
 /// Per-case `(case_id, status)` pairs from `CASE <id> <STATUS>` protocol
 /// lines, for coverage evidence derivation. The suite judge remains the

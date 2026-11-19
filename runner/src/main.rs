@@ -32,6 +32,7 @@ fn main() {
         Some("run-m1r-suite") => cmd_run_suite(Suite::M1rSuite, "run-m1r-suite", &args[1..]),
         Some("run-m1r-user") => cmd_run_suite(Suite::M1rUser, "run-m1r-user", &args[1..]),
         Some("run-m1r-fault") => cmd_run_suite(Suite::M1rFault, "run-m1r-fault", &args[1..]),
+        Some("run-m2-suite") => cmd_run_suite(Suite::M2Suite, "run-m2-suite", &args[1..]),
         Some("coverage") => cmd_coverage(&args[1..]),
         Some("check-rust-only") => rustonly::cmd(&args[1..]),
         Some("demo-full") => demo::cmd_demo_full(&args[1..]),
@@ -44,6 +45,7 @@ fn main() {
                  \x20 run-m1r-suite --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-user --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m1r-fault --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
+                 \x20 run-m2-suite --iso <iso> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 coverage --manifest <coverage.toml> --serial <serial.log> --suite m1r-user\n\
                  \x20           --run <run-id> --config <CONFIG-ID> --milestone <MxR>\n\
                  \x20 demo-full --iso <iso> --root <root.raw> --work-dir DIR"
@@ -131,15 +133,17 @@ enum Suite {
     M1rSuite,
     M1rUser,
     M1rFault,
+    M2Suite,
 }
 
 impl Suite {
     fn needs_root(&self) -> bool {
-        !matches!(self, Suite::M0r)
+        // M2 is a kernel-only round (no root disk), like the M0R smoke.
+        !matches!(self, Suite::M0r | Suite::M2Suite)
     }
     fn config_id(&self) -> &'static str {
         match self {
-            Suite::M0r => CONFIG_ID_M0R,
+            Suite::M0r | Suite::M2Suite => CONFIG_ID_M0R,
             _ => CONFIG_ID_M1R,
         }
     }
@@ -149,6 +153,7 @@ impl Suite {
             Suite::M1rSuite => "m1r",
             Suite::M1rUser => "m1r-user",
             Suite::M1rFault => "m1r-fault",
+            Suite::M2Suite => "m2",
         }
     }
 }
@@ -321,6 +326,7 @@ fn cmd_run_suite(suite: Suite, cmd: &str, args: &[String]) -> i32 {
         Suite::M1rUser => verdict::judge(&verdict::m1r_user_spec(), &outcome).map(|_| 33),
         Suite::M1rFault => verdict::judge_fault(&verdict::m1r_fault_spec(), &outcome)
             .map(|_| verdict::EXPECTED_FAULT_EXIT_CODE),
+        Suite::M2Suite => verdict::judge(&verdict::m2_suite_spec(), &outcome).map(|_| 33),
     };
     match judged {
         Ok(expected_exit) => {

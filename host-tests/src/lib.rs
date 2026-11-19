@@ -7,12 +7,18 @@
 
 #[path = "../../kernel/src/lib/bitmap.rs"]
 pub mod bitmap;
+#[path = "../../kernel/src/mm/bootmem.rs"]
+pub mod bootmem;
+#[path = "../../kernel/src/mm/buddy.rs"]
+pub mod buddy;
 #[path = "../../kernel/src/lib/elf.rs"]
 pub mod elf;
 #[path = "../../kernel/src/kernel/fixup_table.rs"]
 pub mod fixup_table;
 #[path = "../../kernel/src/kernel/ksyms.rs"]
 pub mod ksyms;
+#[path = "../../kernel/src/mm/slub.rs"]
+pub mod slub;
 #[path = "../../kernel/src/lib/string.rs"]
 pub mod string;
 #[path = "../../kernel/src/kernel/sysarg.rs"]
@@ -20,5 +26,7 @@ pub mod sysarg;
 #[path = "../../kernel/src/kernel/tf_layout.rs"]
 pub mod tf_layout;
 
+#[cfg(test)]
+mod m2tests;
 #[cfg(test)]
 mod tests;
