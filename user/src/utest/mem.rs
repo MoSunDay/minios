@@ -1,6 +1,7 @@
 //! xv6 mem.c bsstest + the sbrktest subset (S4e-2): BSS zero-fill from
-//! exec, and brk grow/touch/shrink/re-grow. The kernel-memory probe and
-//! the OOM fork storm stay deferred (M2, coverage.toml ADR).
+//! exec, and brk grow/touch/shrink/re-grow. The M2 anonymous-memory
+//! cases (mmap/munmap/cow) and the OOM storm live here too; the
+//! kernel-memory probe stays deferred.
 
 use crate::sys;
 
@@ -190,4 +191,50 @@ pub fn case_cow() -> bool {
     };
     // SAFETY: parent's page untouched (isolation), child exited 0.
     unsafe { reaped == pid && status == 0 && COW_PAGE[0] == 0 && COW_PAGE[PAGE - 1] == 0 }
+}
+
+/// Anonymous OOM storm (22 §5 M2 gate): the child demands eager
+/// anonymous mappings until the buddy runs dry; the OOM policy must
+/// terminate exactly the storm child (largest footprint — the driver
+/// and the system survive), and memory service resumes after the reap.
+pub fn case_oom() -> bool {
+    let pid = match sys::fork() {
+        Ok(pid) => pid as i32,
+        Err(_) => return false,
+    };
+    if pid == 0 {
+        // Storm: 1 MiB chunks until the kernel refuses. The refusal is
+        // the OOM self-kill mark; this exit is never reached.
+        const CHUNK: usize = 1 << 20;
+        loop {
+            match sys::mmap(0, CHUNK, abi::PROT_READ | abi::PROT_WRITE, ANON, -1, 0) {
+                Ok(p) if p != 0 => {}
+                _ => break,
+            }
+        }
+        sys::exit(0);
+    }
+    let mut status = 0i32;
+    let reaped = match sys::wait4(pid, &mut status) {
+        Ok(p) => p as i32,
+        Err(_) => return false,
+    };
+    // The storm child was killed (0xff), never a clean refusal exit.
+    if reaped != pid || (status >> 8) & 0xff != 0xff {
+        return false;
+    }
+    // The driver survived and anonymous memory is served again.
+    let a = match sys::mmap(0, PAGE, abi::PROT_READ | abi::PROT_WRITE, ANON, -1, 0) {
+        Ok(p) if p != 0 => p,
+        _ => return false,
+    };
+    // SAFETY: [a, a+PAGE) is a fresh private mapping.
+    unsafe {
+        let p = a as *mut u8;
+        p.write_volatile(0xa5);
+        if p.read_volatile() != 0xa5 {
+            return false;
+        }
+    }
+    sys::munmap(a, PAGE).is_ok()
 }

@@ -139,6 +139,42 @@ pub unsafe fn unmap_page(pml4: PtPtr, va: usize) {
     unsafe { *pte = 0 };
 }
 
+/// Count present user-half data pages (OOM badness input; page-table
+/// frames excluded — the footprint is what a kill returns to the buddy).
+/// SAFETY: pml4 valid; owner not mutating concurrently.
+pub unsafe fn count_user_pages(pml4: PtPtr) -> usize {
+    let mut n = 0usize;
+    unsafe {
+        for i in 0..256usize {
+            let pdpte = (*entries(pml4))[i];
+            if pdpte & PTE_P == 0 {
+                continue;
+            }
+            let pdpt = p2v((pdpte & PTE_ADDR) as usize) as PtPtr;
+            for j in 0..NPTENTRIES {
+                let pde = (*entries(pdpt))[j];
+                if pde & PTE_P == 0 {
+                    continue;
+                }
+                let pd = p2v((pde & PTE_ADDR) as usize) as PtPtr;
+                for k in 0..NPTENTRIES {
+                    let pde2 = (*entries(pd))[k];
+                    if pde2 & PTE_P == 0 {
+                        continue;
+                    }
+                    let pt = p2v((pde2 & PTE_ADDR) as usize) as PtPtr;
+                    for l in 0..NPTENTRIES {
+                        if (*entries(pt))[l] & PTE_P != 0 {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+
 /// Free a user PML4 and every mapped user page (freevm). Kernel-half entries
 /// are shared and must not be freed.
 /// SAFETY: pml4 came from setup_user_pml4 and is no longer in CR3.

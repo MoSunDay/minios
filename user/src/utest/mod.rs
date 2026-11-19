@@ -31,6 +31,7 @@ const CASES: &[(&str, CaseFn)] = &[
     ("xv6.mem.mmap", mem::case_mmap),
     ("xv6.mem.munmap", mem::case_munmap),
     ("xv6.mem.cow", mem::case_cow),
+    ("xv6.mem.oom", mem::case_oom),
     ("xv6.fs.opentest", fs_basic::case_opentest),
     ("xv6.fs.writetest", fs_basic::case_writetest),
     ("xv6.fs.writetest1", fs_basic::case_writetest1),

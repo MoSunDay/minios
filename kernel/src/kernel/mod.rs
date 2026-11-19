@@ -6,6 +6,8 @@ pub mod fixup_table;
 pub mod ksyms;
 pub mod ksymtab;
 pub mod m0r;
+pub mod m2map;
+pub mod m2mem;
 pub mod m2suite;
 pub mod oops;
 pub mod suite;

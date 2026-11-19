@@ -59,6 +59,7 @@ pub fn m1r_user_spec() -> SuiteSpec {
             "xv6.mem.mmap",
             "xv6.mem.munmap",
             "xv6.mem.cow",
+            "xv6.mem.oom",
             "xv6.fs.opentest",
             "xv6.fs.writetest",
             "xv6.fs.writetest1",

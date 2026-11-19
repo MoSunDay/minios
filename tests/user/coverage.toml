@@ -384,6 +384,16 @@ requirement = "required"
 adr = ""
 
 [[cases]]
+case_id = "xv6.mem.oom"
+source = "new:anon-oom-storm"
+milestone = "M2"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.mem.oom"
+requirement = "required"
+adr = "ADR-0015"
+
+[[cases]]
 case_id = "xv6.ipc.sigpipe"
 source = "new:sigpipe-default"
 milestone = "M3"

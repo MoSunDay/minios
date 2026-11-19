@@ -7,6 +7,7 @@ pub mod directmap;
 pub mod fault;
 pub mod frame;
 pub mod mmap;
+pub mod oom;
 pub mod pgtable;
 pub mod slub;
 pub mod uaccess;

@@ -83,6 +83,25 @@
   不因回退放宽任何判定；GRUB 串口自身的输出行不属于协议行。
 - 状态：已接受（依据 40 §1.1 预留的回退条款；升级 QEMU 后可再评估恢复直载主路径）。
 
+### ADR-0015 M2 匿名 OOM：候选选择 + 终止 + 统计（无 swap）
+- 背景：22 §5 M2 gate——匿名页无 swap 不可回收，用户页分配失败只能靠终止
+  最大匿名消费者解压；要求验证 OOM 候选选择、终止与统计（扫描/拒绝/释放/
+  失败计数），不得误杀无关任务或静默丢内存。
+- 决策：`mm/oom.rs`——纯函数候选选择（最大匿名足迹 `count_user_pages`
+  胜出，平手取最低 pid，零足迹不可选）；匿名用户页分配统一走
+  `oom::alloc_user_page()` 阀门（`Mm::alloc` 的 brk/mmap/exec 段 eager 填充、
+  `map_zero_page` 惰性填/栈增长、COW 私有拷贝）：kalloc 失败→failed 计数→
+  ptable 扫描（UNUSED/EMBRYO/ZOMBIE/已 killed/无 mm 一律 rejected）→选中者
+  标记 killed 并按 chan 唤醒；victim==自害（风暴进程）时阀门返回 null，走
+  正常 fault-kill/mmap 回滚路径，他害时 64 次有界 yield 重试等其退出释放。
+  统计 scanned/rejected/freed/kills/failed（Spinlock 静态，快照只读导出）。
+- 约束：fork 页表分配与 kmalloc 保持礼貌 ENOMEM，不入 OOM；内核态触发
+  （m2 引导上下文）无候选只计数不杀；uaccess/fixup 的真实 EFAULT 语义不变；
+  COW 共享帧按映射数计为坏度近似（M2 文档化近似，M8 SMP 重审）。
+- 状态：已接受（m2.oom.select_stats 内核用例：1 GiB 过量申请拒收+回滚帧
+  守恒+计数断言；xv6.mem.oom 用户风暴：最大足迹子进程恰被终止 0xff、驱动
+  存活且事后恢复内存服务；coverage M2 required，ADR-0015 即本条）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

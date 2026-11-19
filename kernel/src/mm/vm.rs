@@ -3,7 +3,8 @@
 //! heap and anonymous mappings each own a VMA, and the page tables are
 //! driven from it (mm/mmap.rs, proc/exec.rs).
 
-use super::frame::{kalloc, kfree, v2p, PGSIZE};
+use super::frame::{kfree, v2p, PGSIZE};
+use super::oom;
 use super::pgtable::{self, PtPtr};
 use super::vma::{VmaTable, VMA_HEAP};
 
@@ -50,7 +51,8 @@ impl Mm {
         }
         let mut a = pgtable::pgroundup(oldsz);
         while a < newsz {
-            let page = kalloc();
+            // Anonymous user pages go through the M2 OOM valve (22 §5).
+            let page = oom::alloc_user_page();
             if page.is_null() {
                 return 0;
             }
@@ -156,7 +158,8 @@ impl Mm {
     /// Load one zeroed page at `va` with `perm` (demand-fill primitive).
     #[allow(dead_code)] // S5 fault-path zero-fill
     pub fn map_zero_page(&mut self, va: usize, perm: u64) -> bool {
-        let page = kalloc();
+        // Demand fills are anonymous user pages: OOM valve applies.
+        let page = oom::alloc_user_page();
         if page.is_null() {
             return false;
         }

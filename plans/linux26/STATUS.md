@@ -557,3 +557,38 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   字节不变；**m2-suite serial 重钉 `e0b9a7aa…15d2`（15 例）**；
   m1r-user root（运行后像）`9c0f9f98…5f32`——内核堆残留随布局位移，
   非语义变化（serial 逐字节相同）。
+
+### m2r-s7（匿名 OOM：候选选择 + 终止 + 统计，2026-11-19）
+
+- 交付：
+  - `mm/oom.rs`（新 211 行）——纯函数候选选择（`select_oom_victim`：最大
+    匿名足迹、平手最低 pid、零足迹不可选）；`alloc_user_page()` 阀门：kalloc
+    失败→failed 计数→`collect_candidates`（ptable 锁下快照，UNUSED/EMBRYO/
+    ZOMBIE/已 killed/无 mm 一律 rejected 计数，`pgtable::count_user_pages`
+    走表数叶子）→选中标记 killed+按 chan 唤醒；自害返回 null 走正常
+    fault-kill/mmap 回滚，他害 64 次有界 yield 重试；统计
+    scanned/rejected/freed/kills/failed（Spinlock 静态）。策略 ADR-0015。
+  - 接线：`vm.rs` `Mm::alloc`（brk/mmap/exec 段 eager 填充）与
+    `map_zero_page`（惰性填/栈增长）、`fault.rs` COW 私有拷贝改走阀门；
+    fork 页表与 kmalloc 保持礼貌 ENOMEM 不入 OOM。
+  - 套件：m2 15→16 `m2.oom.select_stats`（纯选择四断言 + 真实触发：1 GiB
+    过量匿名申请拒收、failed/kills/scanned 计数、无人被杀、回滚+teardown
+    帧守恒、阀门恢复再服务）；m1r-user 38→39 `xv6.mem.oom`（子进程 1 MiB
+    块风暴至枯竭——恰被终止 0xff（最大足迹=自己），驱动存活且 wait4 收割
+    后 mmap 写读 munmap 恢复）；runner m2/m1r spec+自测标记同步 16/39；
+    coverage.toml 增 `xv6.mem.oom`（M2 required，adr ADR-0015）。
+  - 修 bug（QEMU 驱动）：初版 m2.oom 用例复用已 `free()` 的 Mm 做"恢复
+    探测"——`walk(NULL)` 内核 GP oops；改用 fresh Mm。另按行数上限把
+    m2suite 拆为 `m2suite.rs`（物理页）+ `m2map.rs`（映射）+ `m2mem.rs`
+    （缺页/COW/OOM，共享 `pte_of`）。
+- gate：make all/test/fmt-check/check-rust-only 绿（host-tests 38 + runner
+  67 + tools 5）；QEMU 全电池 PASS：m0r 6/6、m1r 20/20、**m1r-user 39/39 +
+  coverage active=39 not-active=1**、m1r-fault 5/5、**m2 16/16**。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585` 字节不变；
+  **m1r-user serial 重钉 `58452d31…48f0`（39 例；root 运行后像
+  `f3384035…1f87`）**；**m1r-fault 重钉 `d98454df…dbfe`**（oom.rs 入链
+  M1RFault 符号位移，verdict 5/5 不变；root `0611a2b6…d4c3`）；**m2-suite
+  serial 重钉 `3c1f5b27…70f5`（16 例）**。
+- 判定：M2 到期 gate 全绿（s3 VMA 核心 → s4 brk/mmap/munmap/mprotect →
+  s5 缺页分类/栈增长/惰性零填 → s6 COW fork → s7 匿名 OOM），本地电池
+  全 PASS；同净树 commit 推 CI，双绿后追记 **M2 🟢**。

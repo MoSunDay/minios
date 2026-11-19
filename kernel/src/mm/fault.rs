@@ -162,7 +162,7 @@ pub fn apply(mm: &mut Mm, action: &FaultAction) -> bool {
                 io::invlpg(*va as u64);
                 return true;
             }
-            let page = frame::kalloc();
+            let page = super::oom::alloc_user_page();
             if page.is_null() {
                 return false;
             }
