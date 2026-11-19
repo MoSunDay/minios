@@ -9,4 +9,5 @@ pub mod pgtable;
 pub mod slub;
 pub mod uaccess;
 pub mod vm;
+pub mod vma;
 pub mod vmalloc;

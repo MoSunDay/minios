@@ -25,8 +25,12 @@ pub mod string;
 pub mod sysarg;
 #[path = "../../kernel/src/kernel/tf_layout.rs"]
 pub mod tf_layout;
+#[path = "../../kernel/src/mm/vma.rs"]
+pub mod vma;
 
 #[cfg(test)]
 mod m2tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vmatests;

@@ -441,3 +441,21 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
 - 证据（净树工作树 = 已验证 scratch 树，patcher 逐字节复现）：m2 套件 9/9
   PASS（zones DMA=2261 NORMAL=61408）；m0r/m1r-suite/m1r-fault/m1r-user serial
   钉值全部不变；make all/test/fmt-check 绿。CI 待本次 push 后确认。
+
+### m2r-s3（匿名 VMA 纯核，2026-11-19）
+
+- 交付：`kernel/src/mm/vma.rs`（308 行纯核）——定容 32 槽排序 VMA 表：
+  insert（排序/重叠拒绝/同属性邻接合并）、find/overlap、boundary/split_at、
+  remove_range（事务性：容量预检 straddles 需求，失败零突变）、set_prot
+  （只读覆盖预检 + 边界分裂 + 重合并）、find_area_topdown（gap 顶= min(gap_top,
+  ceiling) 防越 ceiling 溢出）；权限模型 PROT_R/W/X(+RW/RWX) + VMA_ANON/STACK/HEAP，
+  VMA_HEAP 允许字节精确 break（brk 语义）。内核接线仅 `mm/mod.rs` +1 行与
+  `#[allow(dead_code)] // s4 mm wiring` 项级注记（内核 -D warnings）。
+- host：`host-tests/src/vmatests.rs` 12 例（插入合并/重叠拒绝/heap 字节精度/
+  边界查找/分裂/满表容量失败/头尾中移除/重保护重合并/覆盖缺失拒绝/顶选址/
+  brk 周期回归），22 §6.1「VMA 分裂合并」host gate 落账。
+- gate：make all/test/fmt 绿（host-tests 38 例）；QEMU 五套件 verdict 全 PASS
+  （m0r 6/6、m1r 20/20、m1r-user 35/35 + coverage active=35、m1r-fault 5/5、
+  m2 9/9）。钉值：m0r/m1r-suite/m1r-user 串口与 root 字节不变；
+  **m1r-fault 串口重钉 `6a875ab4…4ef2`（root `de5b494a…c61a`）**——vma 模块入链致
+  符号位移（rust_main+0x1152），verdict 仍 5/5 PASS（40 §6 按 S4e-4 先例记录）。
