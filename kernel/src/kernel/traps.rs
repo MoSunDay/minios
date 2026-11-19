@@ -202,7 +202,16 @@ pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
             // Spurious/unhandled PIC lines: acknowledge conservatively.
             crate::drivers::pic::eoi(v as u8);
         }
-        T_PGFLT if !tf.from_user() => fixup_or_oops(tf, "page fault in kernel"),
+        T_PGFLT if !tf.from_user() => {
+            // Kernel-mode #PF on a user address (uaccess copy into a
+            // fork-COW/lazy page): resolve against the running process's
+            // mm before fixup recovery; only unresolvable faults EFAULT.
+            let cr2 = crate::arch::x86_64::io::in64_cr2() as usize;
+            if crate::mm::fault::handle_kernel_user_fault(cr2, tf.err) {
+                return; // resolved: retry the faulting instruction
+            }
+            fixup_or_oops(tf, "page fault in kernel");
+        }
         // User #PF (22 §4): try the M2 resolver first — stack growth, lazy
         // anonymous zero-fill; unresolved faults kill only the process.
         T_PGFLT if tf.from_user() => {

@@ -129,19 +129,63 @@ fn alloc_page_locked() -> Option<*mut u8> {
     None
 }
 
-/// kfree: junk-fill and return one page (direct-map pointer).
-/// SAFETY: the page must not be referenced anywhere else.
+/// kfree: drop one reference to a page (direct-map pointer). COW-shared
+/// frames (count > 1) only decrement; the last reference junk-fills the
+/// page and hands it back to the buddy.
 pub fn kfree(v: *mut u8) {
     let pa = v2p(v as usize);
     if v as usize % PGSIZE != 0 || pa < unsafe { FLOOR_PA } || pa >= PHYS_TOP {
         panic!("kfree: bad page {:#x}", v as usize);
     }
-    memset(v, 1, PGSIZE);
     let _guard = KMEM_LOCK.lock();
-    if !buddy::free_page(zones_mut(), mem_map_mut(), (pa / PGSIZE) as u32) {
+    let m = mem_map_mut();
+    let pg = &mut m[pa / PGSIZE];
+    if pg.flags & buddy::PG_RESERVED != 0 || pg.flags & buddy::PG_FREE != 0 || pg.count == 0 {
+        panic!("kfree: double free or bad frame {:#x}", pa);
+    }
+    if pg.count > 1 {
+        // Another owner still maps this frame; keep the page resident.
+        pg.count -= 1;
+        return;
+    }
+    memset(v, 1, PGSIZE);
+    if !buddy::free_page(zones_mut(), m, (pa / PGSIZE) as u32) {
         panic!("kfree: double free or bad frame {:#x}", pa);
     }
     recount_free();
+}
+
+/// Current share count of an allocated frame (COW bookkeeping; 0 when
+/// the frame is free or reserved).
+pub fn page_ref(pa: usize) -> u16 {
+    let _guard = KMEM_LOCK.lock();
+    let pg = &mem_map_mut()[pa / PGSIZE];
+    if pg.flags & buddy::PG_FREE != 0 || pg.flags & buddy::PG_RESERVED != 0 {
+        return 0;
+    }
+    pg.count
+}
+
+/// Add one share on an allocated frame (fork maps the parent's frames
+/// into the child address space).
+pub fn page_ref_inc(pa: usize) {
+    let _guard = KMEM_LOCK.lock();
+    let pg = &mut mem_map_mut()[pa / PGSIZE];
+    if pg.flags & buddy::PG_FREE != 0 || pg.flags & buddy::PG_RESERVED != 0 || pg.count == 0 {
+        panic!("page_ref_inc: unallocated frame {:#x}", pa);
+    }
+    pg.count += 1;
+}
+
+/// Drop one share taken by `page_ref_inc` (never the allocation ticket:
+/// the final release always goes through `kfree`).
+pub fn page_ref_dec(pa: usize) {
+    let _guard = KMEM_LOCK.lock();
+    let pg = &mut mem_map_mut()[pa / PGSIZE];
+    if pg.flags & buddy::PG_FREE != 0 || pg.flags & buddy::PG_RESERVED != 0 || pg.count < 2 {
+        panic!("page_ref_dec: unshared frame {:#x}", pa);
+    }
+    pg.count -= 1;
 }
 
 /// kmalloc: SLUB object allocation (8..=2048 byte classes); sizes above

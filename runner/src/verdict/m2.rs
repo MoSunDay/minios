@@ -25,6 +25,7 @@ pub fn m2_suite_spec() -> SuiteSpec {
             "m2.mprotect.perm",
             "m2.fault.stack",
             "m2.fault.lazy",
+            "m2.cow.pagecount",
         ],
     }
 }
@@ -40,7 +41,7 @@ mod tests {
             log.push_str(&format!("CASE {c} PASS\n"));
         }
         log.push_str(
-            "MINIOS_X86_64_TEST_PASS_V1 suite=m2 run=core-up total=14 passed=14 failed=0 skipped=0\n",
+            "MINIOS_X86_64_TEST_PASS_V1 suite=m2 run=core-up total=15 passed=15 failed=0 skipped=0\n",
         );
         log
     }
@@ -80,7 +81,7 @@ mod tests {
         assert!(judge(&m2_suite_spec(), &outcome(&good_m2_log(), Some(35), false)).is_err());
         assert!(judge(&m2_suite_spec(), &outcome(&good_m2_log(), None, true)).is_err());
         // Extra marker field mismatch (total) is red too.
-        let log = good_m2_log().replace("total=14 passed=14", "total=14 passed=13");
+        let log = good_m2_log().replace("total=15 passed=15", "total=15 passed=14");
         assert!(judge(
             &m2_suite_spec(),
             &outcome(&log, Some(EXPECTED_EXIT_CODE), false)

@@ -14,7 +14,7 @@ static mut PAGES: [*mut u8; 1024] = [core::ptr::null_mut(); 1024];
 
 pub fn run() -> ! {
     ksymtab::set_active_suite("m2");
-    let checks: [(&str, fn() -> bool); 14] = [
+    let checks: [(&str, fn() -> bool); 15] = [
         ("m2.bootmem.table", case_bootmem_table),
         ("m2.buddy.reserved", case_buddy_reserved),
         ("m2.buddy.conserve_merge", case_buddy_conserve_merge),
@@ -29,6 +29,7 @@ pub fn run() -> ! {
         ("m2.mprotect.perm", case_mprotect_perm),
         ("m2.fault.stack", case_fault_stack),
         ("m2.fault.lazy", case_fault_lazy),
+        ("m2.cow.pagecount", case_cow_pagecount),
     ];
     let mut total = 0usize;
     let mut passed = 0usize;
@@ -698,6 +699,88 @@ fn case_fault_lazy() -> bool {
             fault::classify(&mm, d, fault::PF_ERR_U | fault::PF_ERR_W),
             fault::FaultAction::Kill
         );
+    mm.free();
+    ok && free_frames() == base
+}
+
+/// COW fork page accounting (22 §4): fork shares every writable frame
+/// read-only on both sides (refcount 2), a child write fault breaks into
+/// a private copy (old frame back to 1, content preserved), and the sole
+/// remaining owner re-owns in place without a copy. Teardown returns
+/// every frame exactly once.
+fn case_cow_pagecount() -> bool {
+    let base = free_frames();
+    let mut mm = match vm::Mm::new() {
+        Some(m) => m,
+        None => return false,
+    };
+    let a = mm.mmap_anon(0, PGSIZE, vma::PROT_RW, false);
+    if a == 0 {
+        mm.free();
+        return false;
+    }
+    let e = pte_of(mm.pml4, a);
+    let pa1 = e & pgtable::PTE_ADDR;
+    // SAFETY: direct-map write into the mapped frame.
+    unsafe {
+        *(frame::p2v(pa1 as usize) as *mut u64) = 0x1234_5678_9abc_def0;
+    }
+    // fork: no data frame is copied — the child maps the same physical
+    // page, write is broken on both sides.
+    let before = free_frames();
+    // SAFETY: scratch mm with present user mappings.
+    let child = unsafe { pgtable::copy_user_half(mm.pml4) };
+    // Tables only: the child needs pml4+pdpt+pd+pt for the region and
+    // copies no data frame.
+    let mut ok = !child.is_null() && before - free_frames() == 4;
+    let ce = pte_of(child, a);
+    ok = ok
+        && ce & pgtable::PTE_P != 0
+        && ce & pgtable::PTE_ADDR == pa1
+        && ce & pgtable::PTE_W == 0
+        && ce & pgtable::PTE_NX != 0;
+    ok = ok && pte_of(mm.pml4, a) & pgtable::PTE_W == 0; // parent broken too
+    ok = ok && frame::page_ref(pa1 as usize) == 2;
+    // Child write fault: classify as COW, apply to a private copy.
+    let child_mm = vm::Mm {
+        pml4: child,
+        vmas: mm.vmas,
+        brk: mm.brk,
+    };
+    let mut child_mm = child_mm;
+    let act = fault::classify(
+        &child_mm,
+        a,
+        fault::PF_ERR_U | fault::PF_ERR_W | fault::PF_ERR_P,
+    );
+    ok = ok && matches!(act, fault::FaultAction::Cow { va } if va == a);
+    ok = ok && fault::apply(&mut child_mm, &act);
+    let ce2 = pte_of(child, a);
+    let pa2 = ce2 & pgtable::PTE_ADDR;
+    ok = ok
+        && pa2 != pa1
+        && ce2 & pgtable::PTE_W != 0
+        && ce2 & pgtable::PTE_U != 0
+        && ce2 & pgtable::PTE_NX != 0
+        && frame::page_ref(pa1 as usize) == 1
+        && frame::page_ref(pa2 as usize) == 1;
+    // The copy carried the stamped marker.
+    if ce2 & pgtable::PTE_P != 0 {
+        // SAFETY: direct-map word inside the mapped frame.
+        let w = unsafe { *(frame::p2v(pa2 as usize) as *const u64) };
+        ok = ok && w == 0x1234_5678_9abc_def0;
+    }
+    // Parent write fault on the now-solely-owned frame: re-own in place,
+    // no copy, same physical page.
+    let act2 = fault::classify(&mm, a, fault::PF_ERR_U | fault::PF_ERR_W | fault::PF_ERR_P);
+    ok = ok && matches!(act2, fault::FaultAction::Cow { va } if va == a);
+    ok = ok && fault::apply(&mut mm, &act2);
+    ok = ok
+        && pte_of(mm.pml4, a) & pgtable::PTE_W != 0
+        && pte_of(mm.pml4, a) & pgtable::PTE_ADDR == pa1;
+    // Teardown: both spaces release every frame exactly once.
+    // SAFETY: child tables no longer referenced.
+    unsafe { pgtable::free_user_pml4(child) };
     mm.free();
     ok && free_frames() == base
 }

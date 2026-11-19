@@ -212,29 +212,26 @@ pub unsafe fn copy_user_half(src: PtPtr) -> PtPtr {
                         if spe & PTE_P == 0 {
                             continue;
                         }
-                        let newp = kalloc();
-                        if newp.is_null() {
-                            free_user_pml4(dst);
-                            failed = true;
-                            break 'outer;
-                        }
-                        crate::klib::string::memmove(
-                            newp,
-                            p2v((spe & PTE_ADDR) as usize) as *mut u8,
-                            PGSIZE,
-                        );
                         let va = ((i as u64) << 39
                             | (j as u64) << 30
                             | (k as u64) << 21
                             | (l as u64) << 12) as usize;
-                        if mappages(
-                            dst,
-                            va,
-                            PGSIZE,
-                            v2p(newp as usize),
-                            spe & (PTE_W | PTE_U | PTE_NX),
-                        ) < 0
-                        {
+                        let pa = spe & PTE_ADDR;
+                        let bits = spe & (PTE_U | PTE_NX);
+                        if spe & PTE_W != 0 {
+                            // COW: break write on BOTH sides; each writer
+                            // faults into a private copy (mm/fault.rs).
+                            (*entries(spt))[l] = pa | PTE_P | bits;
+                            // SAFETY: src may be the active CR3.
+                            crate::arch::x86_64::io::invlpg(va as u64);
+                        }
+                        // SAFETY: the frame is allocated and stays
+                        // resident while either side maps it.
+                        super::frame::page_ref_inc(pa as usize);
+                        if mappages(dst, va, PGSIZE, pa as usize, bits) < 0 {
+                            // Every shared frame already mapped by dst
+                            // carries a reference; freeing dst drops
+                            // them all (refcount-aware kfree).
                             free_user_pml4(dst);
                             failed = true;
                             break 'outer;

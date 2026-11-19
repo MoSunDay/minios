@@ -3,11 +3,12 @@
 //! growth bounded by the guard floor, lazy anonymous zero-fill; anything
 //! else kills the faulting process.
 
-use super::frame::PGSIZE;
+use super::frame::{self, PGSIZE};
 use super::mmap::prot_to_pte;
 use super::pgtable;
 use super::vm::{Mm, USER_STACK_TOP};
 use super::vma::{self, Vma};
+use crate::arch::x86_64::io;
 
 /// #PF error-code bits (Intel Vol.3 6.15).
 pub const PF_ERR_P: u64 = 1 << 0; // PTE present
@@ -30,6 +31,9 @@ pub enum FaultAction {
     /// Data access below the stack VMA but at/above the guard floor:
     /// grow the stack VMA down to `new_start` (zero-filled, RW).
     GrowStack { new_start: usize },
+    /// Write to a present read-only page whose VMA still grants write:
+    /// the fork-time COW break — copy the frame or re-own it.
+    Cow { va: usize },
     /// Unrecoverable: the caller kills the faulting process.
     Kill,
 }
@@ -47,7 +51,10 @@ pub fn classify(mm: &Mm, va: usize, err: u64) -> FaultAction {
         return FaultAction::Kill; // non-canonical or kernel half
     }
     if err & PF_ERR_U == 0 {
-        return FaultAction::Kill; // kernel-mode access; M1R fixup paths own it
+        // Direct kernel-mode callers Kill; the traps layer routes real
+        // supervisor #PFs through handle_kernel_user_fault, which
+        // synthesizes the user bit for classification.
+        return FaultAction::Kill;
     }
     match mm.vmas.find(va) {
         Some(i) => {
@@ -62,7 +69,20 @@ pub fn classify(mm: &Mm, va: usize, err: u64) -> FaultAction {
                 return FaultAction::Kill; // reserved, not mapped
             }
             if err & PF_ERR_P != 0 {
-                return FaultAction::Kill; // present + permitted: stale/foreign PTE
+                // Present + permitted leaves exactly one legal form: a
+                // write to a page the VMA still allows but whose PTE
+                // lost W at fork (COW). Anything else is stale/foreign.
+                if err & PF_ERR_W != 0 && v.prot & vma::PROT_W != 0 {
+                    // SAFETY: valid table; walk allocates nothing.
+                    let pte = unsafe { pgtable::walk(mm.pml4, va, false) };
+                    let cow = !pte.is_null() && unsafe { *pte } & pgtable::PTE_W == 0;
+                    if cow {
+                        return FaultAction::Cow {
+                            va: pgtable::pgrounddown(va),
+                        };
+                    }
+                }
+                return FaultAction::Kill;
             }
             FaultAction::Fill {
                 va: pgtable::pgrounddown(va),
@@ -122,6 +142,47 @@ pub fn apply(mm: &mut Mm, action: &FaultAction) -> bool {
                 true
             }
         },
+        FaultAction::Cow { va } => {
+            // SAFETY: valid table; walk allocates nothing.
+            let pte = unsafe { pgtable::walk(mm.pml4, *va, false) };
+            if pte.is_null() {
+                return false;
+            }
+            let entry = unsafe { *pte };
+            if entry & pgtable::PTE_P == 0 {
+                return false;
+            }
+            let pa = entry & pgtable::PTE_ADDR;
+            let keep = entry & pgtable::PTE_NX;
+            if frame::page_ref(pa as usize) == 1 {
+                // Sole owner left (the other side exited or unmapped):
+                // re-own in place, no copy.
+                unsafe { *pte = pa | pgtable::PTE_P | pgtable::PTE_U | pgtable::PTE_W | keep };
+                // SAFETY: this mm may be the active CR3.
+                io::invlpg(*va as u64);
+                return true;
+            }
+            let page = frame::kalloc();
+            if page.is_null() {
+                return false;
+            }
+            // SAFETY: fresh destination; source frame stays mapped by
+            // its remaining owner.
+            unsafe {
+                crate::klib::string::memmove(page, frame::p2v(pa as usize) as *mut u8, PGSIZE);
+                *pte = frame::v2p(page as usize) as u64
+                    | pgtable::PTE_P
+                    | pgtable::PTE_U
+                    | pgtable::PTE_W
+                    | keep;
+            }
+            // SAFETY: this mm may be the active CR3.
+            io::invlpg(*va as u64);
+            // Drop this side's share of the old frame (the allocation
+            // ticket stays with the remaining owner).
+            frame::page_ref_dec(pa as usize);
+            true
+        }
         FaultAction::Kill => false,
     }
 }
@@ -131,4 +192,24 @@ pub fn apply(mm: &mut Mm, action: &FaultAction) -> bool {
 pub fn handle_user_fault(mm: &mut Mm, va: usize, err: u64) -> bool {
     let action = classify(mm, va, err);
     apply(mm, &action)
+}
+
+/// Supervisor-mode #PF on a user address: uaccess copies (copyout into a
+/// fork-COW page, copyin from a lazily absent page) fault with err.U=0
+/// even though the W/P bits apply to CPL0 accesses identically. Resolve
+/// them against the running process's mm — classifying with the user bit
+/// synthesized, since every VMA/PTE rule the classifier checks depends
+/// only on the access type (P/W/I), never on the privilege level. false
+/// keeps the M1R fixup/oops semantics for genuine EFAULT untouched.
+pub fn handle_kernel_user_fault(va: usize, err: u64) -> bool {
+    let p = crate::proc::proc::myproc();
+    if p.is_null() {
+        return false; // boot/kernel context: fixup owns it
+    }
+    // SAFETY: the running process owns mm; resolution only takes the
+    // frame allocator lock (uaccess never runs under it).
+    match unsafe { (*p).mm.as_mut() } {
+        Some(mm) => handle_user_fault(mm, va, err | PF_ERR_U),
+        None => false, // kernel thread: fixup owns it
+    }
 }

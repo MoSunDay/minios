@@ -521,3 +521,39 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   m2-suite serial 重钉 `3f67e996…c9ba`（14 例）；m1r-user root（运行后像）
   `12c253b4…4646`——内核堆残留字节随布局位移，非语义变化（serial 逐字节
   相同）。
+
+### m2r-s6（COW fork + 内核态用户缺页解析，2026-11-19）
+
+- 交付：
+  - `mm/frame.rs`——页帧引用计数：`Page.count` 兼作分配票根+共享数；
+    `kfree` 升级为减引用语义（count>1 只递减保留驻留，末引用才 junk-fill
+    +回伙伴系统；双释放/坏帧 panic）；新增 `page_ref/page_ref_inc/
+    page_ref_dec`（均在 KMEM_LOCK 下，dec 仅 count≥2 否则 panic）。
+  - `mm/pgtable.rs` `copy_user_half`——fork 由整页复制改 COW 共享：可写
+    叶子双清 W（父侧 PTE 就地改写 + `invlpg`，src 可能是活动 CR3）、
+    `page_ref_inc`、子侧同帧映射 bits=P|U|NX；失败路径 `free_user_pml4(dst)`
+    经引用计数 kfree 回滚全部已共享帧。
+  - `mm/fault.rs`——`FaultAction::Cow{va}`：classify（err&P 合法形态仅
+    写缺页+VMA W+PTE 缺 W→Cow，其余 Kill）；apply（ref==1 原地复权：恢复
+    W 保 NX + invlpg；ref>1 kalloc+memmove 私有拷贝映射 P|U|W|NX + 旧帧
+    page_ref_dec）。
+  - **COW 回归修复**（QEMU 驱动）：fork 双清 W 后父进程用户页只读，
+    uaccess `copyout`（内核态写用户缓冲，如 sys_read 落 cap 到栈）经
+    M1R fixup 直接 EFAULT，`run_capture` read 返回 Err——m1r-user 8 例
+    全灭（exectest/echo/cat/grep/wc/ls/forktest/stressfs；产出 0 字节的
+    子进程用例不触发故仍绿）。修法：`fault.rs` 新增
+    `handle_kernel_user_fault`——内核态 #PF 落用户半区先按当前进程 mm
+    解析（合成 U 位走 classify：COW/Fill/GrowStack 可解析则重执行指令），
+    不可解析才回落 M1R fixup/oops（真实 EFAULT 语义不变）；traps.rs
+    `T_PGFLT if !from_user` 臂接入。
+- 套件：m2 14→15——`m2.cow.pagecount`（fork 帧共享：ref=2+双侧 W 清+恰
+  4 表帧开销；子写 COW 私有拷贝：ref 回 1+写标记保留；父独占后原地复权；
+  teardown 帧守恒精确）；runner m2 spec/自测标记同步 15。
+- gate：make all/test/fmt-check 绿（host-tests 38 + runner 67 + tools 5）；
+  QEMU 全电池 PASS：m0r 6/6、m1r 20/20、**m1r-user 38/38（COW 回归修复
+  后复绿）** + coverage active=38 not-active=1、m1r-fault 5/5、m2 15/15。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585`、m1r-user serial
+  `b0f5743f…a2c6`、m1r-fault `1fc816dd…58de`（root `a44075ba…cea0`）
+  字节不变；**m2-suite serial 重钉 `e0b9a7aa…15d2`（15 例）**；
+  m1r-user root（运行后像）`9c0f9f98…5f32`——内核堆残留随布局位移，
+  非语义变化（serial 逐字节相同）。
