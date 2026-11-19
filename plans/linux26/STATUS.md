@@ -8,17 +8,17 @@
 
 | 范围 | 当前状态 | 判定 |
 |------|----------|------|
-| Core-2.6（M0R–M8） | 🟢 M0R done（M1R–M8 pending） | M0R 净树取证全绿（HEAD `4c22b7b`，内核 sha256 `8aacf344…`）+ CI 首跑 success（run #1，全部 14 步绿）；证据见下文 M0R 现状 |
+| Core-2.6（M0R–M8） | 🟢 M0R–M1R done（M2–M8 pending） | M0R 净树取证全绿（HEAD `4c22b7b`）+ CI 首跑 success；M1R 净树电池 9 步全绿（HEAD `ef2a335`，serial 钉值全部复现）+ CI run 44381221846 success；证据见下文 M0R/M1R 现状 |
 | Parity-2.6（M9+） | ⬜ **pending** | 未启动；权威差距表、Parity 配置和外部矩阵均未验收 |
 
-最近同步：2026-11-16。唯一实现基线为 Linux 2.6.39.4 / x86_64；不沿用旧完成度或工期。
+最近同步：2026-11-19。唯一实现基线为 Linux 2.6.39.4 / x86_64；不沿用旧完成度或工期。
 
 ## 里程碑状态
 
 | 里程碑 | 交付摘要 | 状态 | 当前证据/前置 |
 |--------|----------|------|---------------|
 | M0R | 工具锁、Multiboot1/ELF64、长模式、高半区、真实 QEMU smoke、CI workflow | 🟢 **done**（2026-11-16 判绿） | 净树 HEAD `4c22b7b` 全套 exit 0 + 三组 sha256 + CI 首跑 success：https://github.com/MoSunDay/minios/actions/runs/43886738739 |
-| M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟡 **S1+S2 已交付** | trap/fixup/定时器运行时全绿（m1r-suite 33、m1r-fault 35、M0R 串口字节不变）；S3 用户 ELF（execve）待做；旧 C usertests 不计 |
+| M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟢 **done**（2026-11-19 判绿） | 净树 HEAD `ef2a335` 电池 9 步 EXIT0（smoke/m1r-suite/m1r-user 35+coverage/m1r-fault/demo-full，serial 钉值 `028048dd…`/`6137aefd…`/`0c39a3e5…`/`1ba8b13a…` 全复现）；CI run 44381221846 success；详见文末 M1R 判绿收口 |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | ⬜ pending | 等 M1R 全绿 |
 | M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE | ⬜ pending | 等 M2 全绿 |
 | M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | ⬜ pending | 等 M3 全绿 |
@@ -405,3 +405,20 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   `token[:=]` 关键字规则）；扫描器遍历全史 blob，修复只能重写 tip——变量改名
   word 后 amend 为 251883c 并 --force-with-lease（本会话自建提交、CI 红、单作者
   仓库）。CI 17 步全绿（1m42s），demo-full 在 GitHub runner 上通过。
+
+## M1R 判绿收口（2026-11-19，s0）
+
+- 判定对象：净树 HEAD `ef2a335cd920d511107c8d9f7624edb6aa2d67c0`（工作树 clean），同一
+  commit 上取得全部证据，无跨 commit 拼接。
+- 本地电池（`results/s0-m1r-green/battery.log`，隔离 target 目录，9 步全 EXIT0）：
+  make-all / test（host+runner 全过）/ fmt-check / check-rust-only / test-qemu-smoke
+  / test-qemu / test-expected-fault / test-qemu-user（35 active + coverage PASS，
+  复跑亦绿）/ demo-full。关键 sha256 见 `results/s0-m1r-green/hashes.txt`：
+  内核 `ef0c4921…f86da`；serial 钉值 smoke `028048dd…92f1`、m1r-suite `6137aefd…e585`、
+  m1r-user `0c39a3e5…08d3`（root.raw `a5a140d6…c947`）、m1r-fault `1ba8b13a…4fec`。
+  m1r-user 的 root.raw 为运行后快照，退出 flush 时序可致尾块差异（非 gate；判定键为
+  serial 标记 + coverage JSON），复跑钉值以 `a5a140d6…c947` 为准。
+- CI：run 44381221846（push，HEAD `ef2a335c`）结论 success：
+  https://github.com/MoSunDay/minios/actions/runs/44381221846
+- 判定：M0R 冻结面未被扰动（smoke 串口字节不变），M1R 全部到期 gate 于同一净树
+  commit 本地 + CI 双绿 → **M1R 🟢**。下一步 M2（物理页基础设施起步）。
