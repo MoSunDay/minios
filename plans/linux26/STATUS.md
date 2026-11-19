@@ -591,4 +591,6 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   serial 重钉 `3c1f5b27…70f5`（16 例）**。
 - 判定：M2 到期 gate 全绿（s3 VMA 核心 → s4 brk/mmap/munmap/mprotect →
   s5 缺页分类/栈增长/惰性零填 → s6 COW fork → s7 匿名 OOM），本地电池
-  全 PASS；同净树 commit 推 CI，双绿后追记 **M2 🟢**。
+  全 PASS；同净树 commit `67bc6ca` 推 CI run 44556592736（core-ci）结论
+  success → 本地 + CI 双绿 → **M2 🟢**。下一步 M3（proc/sched 深化，
+  21 §M3 gate）。
