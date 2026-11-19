@@ -203,6 +203,25 @@ pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
             crate::drivers::pic::eoi(v as u8);
         }
         T_PGFLT if !tf.from_user() => fixup_or_oops(tf, "page fault in kernel"),
+        // User #PF (22 §4): try the M2 resolver first — stack growth, lazy
+        // anonymous zero-fill; unresolved faults kill only the process.
+        T_PGFLT if tf.from_user() => {
+            let cr2 = crate::arch::x86_64::io::in64_cr2() as usize;
+            let p = crate::proc::proc::myproc();
+            let handled = if p.is_null() {
+                false
+            } else {
+                // SAFETY: the running process owns mm.
+                match unsafe { (*p).mm.as_mut() } {
+                    Some(mm) => crate::mm::fault::handle_user_fault(mm, cr2, tf.err),
+                    None => false,
+                }
+            };
+            if !handled {
+                oops::user_fault(tf, T_PGFLT);
+                crate::proc::proc::kill_cur_on_fault();
+            }
+        }
         T_GPFLT if !tf.from_user() => fixup_or_oops(tf, "general protection fault in kernel"),
         // Syscalls must arrive through LSTAR (_syscall_entry), never int
         // 0x80: the IDT gate has no swapgs/stack-switch, so a CPL0 entry

@@ -4,6 +4,7 @@
 pub mod bootmem;
 pub mod buddy;
 pub mod directmap;
+pub mod fault;
 pub mod frame;
 pub mod mmap;
 pub mod pgtable;

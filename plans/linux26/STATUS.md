@@ -496,3 +496,28 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   m1r-fault 重钉 serial `e531a032…64f7` / root `a44075ba…cea0`**（usertests
   +3 例改 root 模板 + mm 重写致符号位移）；m2-suite serial 首钉
   `e9cb4531…a419`。
+
+### m2r-s5（缺页分类 + 栈增长 + 惰性零填，2026-11-19）
+
+- 交付：`kernel/src/mm/fault.rs`（新 134 行纯函数模块）——#PF 错误码位
+  （P/W/U/I）+ `USER_CANON_TOP` canonical 校验 + VMA 权限四重 kill（写只读/
+  NX 取指/PROT_NONE/驻留页陈旧 P）+ `FaultAction{Fill,GrowStack,Kill}` 分类；
+  apply：惰性匿名零填（map_zero_page 按需一页）与栈 VMA 下扩（guard 地板
+  `STACK_GUARD_FLOOR = USER_STACK_TOP-64MiB`，增长窗口即 mmap 让出的 gap，
+  取指缺页不增长）；内核来源（err 无 U 位）一律 kill（内核访问用户走 M1R
+  fixup，不经此路径）。`traps.rs` 增 `T_PGFLT if from_user` 分派臂：先解析
+  （成功则 iretq 返回重执行），未解析才 `oops::user_fault` + kill_cur。
+- 套件：m2 12→14——`m2.fault.stack`（单页/多页下扩、VMA 端点与零填 RW|NX
+  校验、guard 地板之下/取指/栈顶之上全 kill、帧守恒）、`m2.fault.lazy`
+  （PROT_NONE→mprotect RW 后 PTE 仍缺、按需逐页填（暖表后恰 -1 帧）、
+  邻页保持 absent、陈旧 P/写只读/NX/非 canonical/内核源/PROT_NONE 七类
+  kill、帧守恒）；runner m2 spec/自测标记同步 14。
+- gate：make all/test/fmt-check 绿（host-tests 38 + runner 67 + tools 5）；
+  QEMU 全电池 PASS：m0r 6/6、m1r 20/20、m1r-user 38/38 + coverage
+  active=38、m1r-fault 5/5、m2 14/14。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585`、m1r-user serial
+  `b0f5743f…a2c6` 字节不变；**m1r-fault 串口重钉 `1fc816dd…58de`（root
+  `a44075ba…cea0` 不变）**——fault.rs 入链符号位移，verdict 5/5 不变；
+  m2-suite serial 重钉 `3f67e996…c9ba`（14 例）；m1r-user root（运行后像）
+  `12c253b4…4646`——内核堆残留字节随布局位移，非语义变化（serial 逐字节
+  相同）。

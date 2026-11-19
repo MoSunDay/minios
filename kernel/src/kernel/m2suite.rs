@@ -6,7 +6,7 @@
 use super::ksymtab;
 use crate::arch::x86_64::io;
 use crate::console;
-use crate::mm::{bootmem, directmap, frame, mmap, pgtable, vm, vma, vmalloc};
+use crate::mm::{bootmem, directmap, fault, frame, mmap, pgtable, vm, vma, vmalloc};
 use frame::{free_frames, kalloc, kfree, kmalloc, kmfree, p2v, v2p, PGSIZE};
 
 /// Sampled allocation scratch (1024 pointers, 8 KiB bss).
@@ -14,7 +14,7 @@ static mut PAGES: [*mut u8; 1024] = [core::ptr::null_mut(); 1024];
 
 pub fn run() -> ! {
     ksymtab::set_active_suite("m2");
-    let checks: [(&str, fn() -> bool); 12] = [
+    let checks: [(&str, fn() -> bool); 14] = [
         ("m2.bootmem.table", case_bootmem_table),
         ("m2.buddy.reserved", case_buddy_reserved),
         ("m2.buddy.conserve_merge", case_buddy_conserve_merge),
@@ -27,6 +27,8 @@ pub fn run() -> ! {
         ("m2.vma.layout", case_vma_layout),
         ("m2.mmap.eager", case_mmap_eager),
         ("m2.mprotect.perm", case_mprotect_perm),
+        ("m2.fault.stack", case_fault_stack),
+        ("m2.fault.lazy", case_fault_lazy),
     ];
     let mut total = 0usize;
     let mut passed = 0usize;
@@ -531,6 +533,171 @@ fn case_mprotect_perm() -> bool {
     ok = ok && !mm.mprotect(a + 4 * PGSIZE, PGSIZE, vma::PROT_R);
     ok = ok && !mm.mprotect(a, PGSIZE, vma::PROT_R | 0x8);
     ok = ok && mm.vmas.count == 1;
+    mm.free();
+    ok && free_frames() == base
+}
+
+/// Stack VMA growth and guard (22 §4): a data fault below the stack VMA
+/// but at/above the guard floor grows the VMA down with zeroed RW|NX
+/// pages; below the floor, above the top, or an instruction fetch is
+/// killed. Growth is repeatable and keeps the table sorted.
+fn case_fault_stack() -> bool {
+    let base = free_frames();
+    let mut mm = match vm::Mm::new() {
+        Some(m) => m,
+        None => return false,
+    };
+    let top = vm::USER_STACK_TOP;
+    let s0 = top - vm::USER_STACK_PAGES * PGSIZE;
+    if !mm.vmas.insert(vma::Vma {
+        start: s0,
+        end: top,
+        prot: vma::PROT_RW,
+        flags: vma::VMA_STACK,
+    }) {
+        mm.free();
+        return false;
+    }
+    // One page below the stack: growth with the faulting page zeroed.
+    let act = fault::classify(&mm, s0 - PGSIZE, fault::PF_ERR_U | fault::PF_ERR_W);
+    let mut ok =
+        matches!(act, fault::FaultAction::GrowStack { new_start } if new_start == s0 - PGSIZE);
+    ok = ok
+        && fault::apply(
+            &mut mm,
+            &fault::FaultAction::GrowStack {
+                new_start: s0 - PGSIZE,
+            },
+        );
+    ok = ok
+        && mm.vmas.count == 1
+        && mm.vmas.vmas[0].start == s0 - PGSIZE
+        && mm.vmas.vmas[0].end == top
+        && mm.vmas.vmas[0].flags & vma::VMA_STACK != 0;
+    let e = pte_of(mm.pml4, s0 - PGSIZE);
+    ok = ok && e & pgtable::PTE_P != 0 && e & pgtable::PTE_W != 0 && e & pgtable::PTE_NX != 0;
+    if e & pgtable::PTE_P != 0 {
+        // SAFETY: direct-map word inside the mapped frame.
+        let w = unsafe { *(frame::p2v((e & pgtable::PTE_ADDR) as usize) as *const u64) };
+        ok = ok && w == 0;
+    }
+    // Growth is repeatable (deep recursion pattern) and eager below the
+    // new start only.
+    let act2 = fault::classify(&mm, s0 - 3 * PGSIZE, fault::PF_ERR_U);
+    ok = ok
+        && matches!(act2, fault::FaultAction::GrowStack { new_start } if new_start == s0 - 3 * PGSIZE);
+    ok = ok
+        && fault::apply(
+            &mut mm,
+            &fault::FaultAction::GrowStack {
+                new_start: s0 - 3 * PGSIZE,
+            },
+        );
+    ok = ok && mm.vmas.count == 1 && mm.vmas.vmas[0].start == s0 - 3 * PGSIZE;
+    ok = ok && pte_of(mm.pml4, s0 - 2 * PGSIZE) & pgtable::PTE_P != 0;
+    // Guard band: below the floor is killed, instruction fetch never grows.
+    ok = ok
+        && matches!(
+            fault::classify(
+                &mm,
+                fault::STACK_GUARD_FLOOR - PGSIZE,
+                fault::PF_ERR_U | fault::PF_ERR_W
+            ),
+            fault::FaultAction::Kill
+        );
+    ok = ok
+        && matches!(
+            fault::classify(&mm, s0 - 4 * PGSIZE, fault::PF_ERR_U | fault::PF_ERR_I),
+            fault::FaultAction::Kill
+        );
+    // Above the stack top: no VMA, killed.
+    ok = ok
+        && matches!(
+            fault::classify(&mm, top + PGSIZE, fault::PF_ERR_U),
+            fault::FaultAction::Kill
+        );
+    mm.free();
+    ok && free_frames() == base
+}
+
+/// Lazy anonymous zero-fill and kill classification (22 §4): pages of a
+/// PROT_NONE reservation re-permissioned to RW fault in one page at a
+/// time; write-to-readonly, NX fetch, non-canonical and kernel-source
+/// faults are all killed.
+fn case_fault_lazy() -> bool {
+    let base = free_frames();
+    let mut mm = match vm::Mm::new() {
+        Some(m) => m,
+        None => return false,
+    };
+    // Reserve 2 pages, then make them RW: the PTEs stay absent (lazy).
+    let c = mm.mmap_anon(0, 2 * PGSIZE, vma::PROT_NONE, false);
+    if c == 0 || !mm.mprotect(c, 2 * PGSIZE, vma::PROT_RW) {
+        mm.free();
+        return false;
+    }
+    let mut ok = pte_of(mm.pml4, c + PGSIZE) & pgtable::PTE_P == 0;
+    let act = fault::classify(&mm, c + PGSIZE, fault::PF_ERR_U | fault::PF_ERR_W);
+    ok = ok
+        && matches!(act, fault::FaultAction::Fill { va, prot } if va == c + PGSIZE && prot == vma::PROT_RW);
+    ok = ok && fault::apply(&mut mm, &act);
+    let e = pte_of(mm.pml4, c + PGSIZE);
+    ok = ok
+        && e & pgtable::PTE_P != 0
+        && e & pgtable::PTE_U != 0
+        && e & pgtable::PTE_W != 0
+        && e & pgtable::PTE_NX != 0;
+    if e & pgtable::PTE_P != 0 {
+        // SAFETY: direct-map word inside the mapped frame.
+        let w = unsafe { *(frame::p2v((e & pgtable::PTE_ADDR) as usize) as *const u64) };
+        ok = ok && w == 0;
+    }
+    // Demand paging: the neighbour is still absent, and its fill drops
+    // exactly one frame (the region's page tables are already warm).
+    ok = ok && pte_of(mm.pml4, c) & pgtable::PTE_P == 0;
+    let before = free_frames();
+    let act0 = fault::classify(&mm, c, fault::PF_ERR_U);
+    ok = ok && matches!(act0, fault::FaultAction::Fill { va, .. } if va == c);
+    ok = ok && fault::apply(&mut mm, &act0);
+    ok = ok && before - free_frames() == 1;
+    // Second fault on the now-present page (stale P): killed.
+    ok = ok
+        && matches!(
+            fault::classify(
+                &mm,
+                c + PGSIZE,
+                fault::PF_ERR_U | fault::PF_ERR_W | fault::PF_ERR_P
+            ),
+            fault::FaultAction::Kill
+        );
+    // Re-protect page 2 read-only: a write fault is killed by VMA prot.
+    ok = ok && mm.mprotect(c + PGSIZE, PGSIZE, vma::PROT_R);
+    ok = ok
+        && matches!(
+            fault::classify(&mm, c + PGSIZE, fault::PF_ERR_U | fault::PF_ERR_W),
+            fault::FaultAction::Kill
+        );
+    // Instruction fetch on a non-exec VMA: killed.
+    ok = ok
+        && matches!(
+            fault::classify(&mm, c, fault::PF_ERR_U | fault::PF_ERR_I),
+            fault::FaultAction::Kill
+        );
+    // Non-canonical address and kernel-source fault: killed.
+    ok = ok
+        && matches!(
+            fault::classify(&mm, 0x0000_8000_0000_0000, fault::PF_ERR_U),
+            fault::FaultAction::Kill
+        );
+    ok = ok && matches!(fault::classify(&mm, c, 0), fault::FaultAction::Kill);
+    // PROT_NONE access is killed regardless of error code bits.
+    let d = mm.mmap_anon(0, PGSIZE, vma::PROT_NONE, false);
+    ok = ok
+        && d != 0
+        && matches!(
+            fault::classify(&mm, d, fault::PF_ERR_U | fault::PF_ERR_W),
+            fault::FaultAction::Kill
+        );
     mm.free();
     ok && free_frames() == base
 }
