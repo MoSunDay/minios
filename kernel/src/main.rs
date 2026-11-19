@@ -44,12 +44,15 @@ enum BootMode {
     M1rSuite,
     M1rUser,
     M1rFault,
+    M2Suite,
     Full,
 }
 
 fn boot_mode(mbi_phys: usize) -> BootMode {
     let cmd = cmdline(mbi_phys);
-    if cmd.contains("m1r-suite") {
+    if cmd.contains("m2-suite") {
+        BootMode::M2Suite
+    } else if cmd.contains("m1r-suite") {
         BootMode::M1rSuite
     } else if cmd.contains("m1r-user") {
         BootMode::M1rUser
@@ -74,8 +77,10 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
     kernel::time::init_pit();
     drivers::pic::unmask(0); // timer only
     proc::fpu::init_fpu();
-    mm::frame::init(mbi_phys);
+    // Record CR3 before frame::init: the direct-map extension walks the
+    // boot PML4 through pgtable::boot_pml4().
     mm::pgtable::set_boot_pml4(io::in64_cr3() as usize);
+    mm::frame::init(mbi_phys);
     match mode {
         // Kernel-mode expected-fault suite: CPL0 injections + fixup + the
         // M1RFault observer; exits 0x11 -> QEMU 35 on PASS (40 §2.1.6).
@@ -89,6 +94,12 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
             ksymtab::set_active_suite("m1r");
             init_m1r_fs();
             kernel::suite::run();
+        }
+        // M2 kernel-mode suite: physical-page foundation + SLUB +
+        // vmalloc/ioremap (no root disk; exits through isa-debug-exit).
+        BootMode::M2Suite => {
+            ksymtab::set_active_suite("m2");
+            kernel::m2suite::run();
         }
         // User-mode suite (S4e-2): the xv6 usertests port as pid 1.
         BootMode::M1rUser => {

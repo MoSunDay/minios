@@ -62,8 +62,11 @@ pub fn setup_user_pml4() -> PtPtr {
     unsafe {
         (*entries(pml4)).fill(0);
         let boot = boot_pml4();
-        // Share the kernel half: direct map (510) and kernel image (511).
-        for i in 510..512 {
+        // Share the kernel half: vmalloc window (288), direct map (510)
+        // and kernel image (511). The vmalloc slot stays empty until
+        // mm::vmalloc first maps something, but sharing it up front keeps
+        // later vmalloc/ioremap mappings reachable under any CR3.
+        for i in [crate::arch::x86_64::VMALLOC_PML4_IDX, 510, 511] {
             (*entries(pml4))[i] = (*entries(boot))[i];
         }
     }

@@ -3,7 +3,10 @@ use core::sync::atomic::{AtomicU16, Ordering};
 
 const COM1: u16 = 0x3f8;
 const VGA_PHYS: usize = 0x000b_8000;
-const VGA_VMA: usize = 0xffff_ffff_8000_0000 + VGA_PHYS;
+// Boot.S pre-maps phys 0..256MiB at PML4[510]; the high half maps the
+// kernel image (phys base 0x500000), so 0xffffffff800b8000 would alias
+// kernel .data, not VGA. Route through the direct map instead.
+const VGA_VMA: usize = 0xffff_ff00_0000_0000 + VGA_PHYS;
 static VGA_CURSOR: AtomicU16 = AtomicU16::new(0);
 
 pub fn init_serial() {
@@ -39,7 +42,8 @@ fn write_vga(byte: u8) {
     } else if byte == b'\r' {
         cursor -= cursor % 80;
     } else {
-        // SAFETY: VGA text memory is identity mapped by the boot page tables.
+        // SAFETY: VGA text memory is pre-mapped by the boot page tables
+        // (direct-map PML4[510], present before rust_main in every mode).
         unsafe {
             let cell = (VGA_VMA + cursor as usize * 2) as *mut u16;
             core::ptr::write_volatile(cell, 0x0f00 | u16::from(byte));

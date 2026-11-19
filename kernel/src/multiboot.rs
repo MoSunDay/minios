@@ -54,7 +54,8 @@ const MBI_FLAG_MEM: u32 = 1 << 0;
 const MBI_FLAG_CMDLINE: u32 = 1 << 2;
 const MBI_FLAG_MMAP: u32 = 1 << 8;
 
-const MMAP_AVAILABLE: u32 = 1;
+/// Multiboot mmap entry type: usable RAM.
+pub const MMAP_AVAILABLE: u32 = 1;
 
 #[repr(C)]
 #[allow(dead_code)]
@@ -91,8 +92,11 @@ pub fn cmdline(mbi_phys: usize) -> &'static str {
     }
 }
 
-/// Call `f(addr, len)` for every available RAM range from the loader's map.
-pub fn for_each_available(mbi_phys: usize, mut f: impl FnMut(u64, u64)) {
+/// Call `f(addr, len, mtype)` for every entry of the loader's map, any
+/// type (MMAP_AVAILABLE = usable RAM; every other value is reserved to
+/// some owner). Falls back to the legacy approximation when the loader
+/// passed only mem_lower/mem_upper.
+pub fn for_each_entry(mbi_phys: usize, mut f: impl FnMut(u64, u64, u32)) {
     // SAFETY: the loader-provided MBI and mmap array are identity mapped.
     unsafe {
         let mbi = &*(mbi_phys as *const MbiInfo);
@@ -101,19 +105,19 @@ pub fn for_each_available(mbi_phys: usize, mut f: impl FnMut(u64, u64)) {
             while off < mbi.mmap_length as usize {
                 let entry = &*((mbi.mmap_addr as usize + off) as *const MmapEntry);
                 off += entry.size as usize + 4;
-                if entry.mtype == MMAP_AVAILABLE {
-                    let base = (entry.addr_low as u64) | ((entry.addr_high as u64) << 32);
-                    let len = (entry.len_low as u64) | ((entry.len_high as u64) << 32);
-                    f(base, len);
-                }
+                let base = (entry.addr_low as u64) | ((entry.addr_high as u64) << 32);
+                let len = (entry.len_low as u64) | ((entry.len_high as u64) << 32);
+                f(base, len, entry.mtype);
             }
             return;
         }
         // Some GRUB builds pass only the legacy sizes (mmap flag clear);
-        // fall back to the flat upper-memory range [1 MiB, 1 MiB+upper).
-        // frame::init clips it at the kernel end and PHYS_TOP anyway.
+        // fall back to the flat bands: low usable, the 0x9fc00..1 MiB
+        // hole reserved, then upper memory above 1 MiB.
         if mbi.flags & MBI_FLAG_MEM != 0 && mbi.mem_upper != 0 {
-            f(0x10_0000, mbi.mem_upper as u64 * 1024);
+            f(0, 0x9_fc00, MMAP_AVAILABLE);
+            f(0x9_fc00, 0x10_0000 - 0x9_fc00, 2);
+            f(0x10_0000, mbi.mem_upper as u64 * 1024, MMAP_AVAILABLE);
         }
     }
 }

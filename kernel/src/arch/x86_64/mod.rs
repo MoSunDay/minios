@@ -11,6 +11,9 @@ pub const PAGE_NX: u64 = 1 << 63;
 pub const DIRECT_VMA: usize = 0xffff_ff00_0000_0000;
 /// Top of direct-mapped physical RAM (kernel image must fit below it).
 pub const PHYS_TOP: usize = 0x1000_0000;
+/// PML4 slot of the kernel vmalloc window at 0xffff_9000_0000_0000
+/// (mm::vmalloc), shared into every address space like the direct map.
+pub const VMALLOC_PML4_IDX: usize = 288;
 
 #[no_mangle]
 pub static RODATA_SENTINEL: u8 = 0x5a;
