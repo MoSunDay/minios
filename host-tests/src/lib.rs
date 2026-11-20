@@ -21,6 +21,8 @@ pub mod fixup_table;
 pub mod ksyms;
 #[path = "../../kernel/src/proc/rbtree.rs"]
 pub mod rbtree;
+#[path = "../../kernel/src/proc/rt.rs"]
+pub mod rt;
 #[path = "../../kernel/src/mm/slub.rs"]
 pub mod slub;
 #[path = "../../kernel/src/lib/string.rs"]
@@ -38,6 +40,8 @@ mod m2tests;
 mod m3tests;
 #[cfg(test)]
 mod rbtreetests;
+#[cfg(test)]
+mod rttests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

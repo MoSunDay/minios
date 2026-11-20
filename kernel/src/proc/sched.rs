@@ -19,7 +19,7 @@ use core::arch::global_asm;
 use core::ptr::addr_of_mut;
 
 use super::proc::myproc;
-use super::{cfs, fpu, preempt, Context, Proc, ProcState, PTABLE_LOCK};
+use super::{cfs, fpu, preempt, rt, Context, Proc, ProcState, SchedPolicy, PTABLE_LOCK};
 use crate::arch::x86_64::{cpu, io};
 use crate::mm::pgtable;
 
@@ -71,10 +71,66 @@ pub static mut CPU0: Cpu = Cpu {
 /// The one UP CFS runqueue (PTABLE_LOCK serializes every mutation).
 static mut CFS_RQ: cfs::Runqueue = cfs::Runqueue::new();
 
+/// The one UP RT runqueue (same lock; RT preempts CFS at pick time).
+static mut RT_RQ: rt::RtRunqueue = rt::RtRunqueue::new();
+
 /// # Safety
 /// PTABLE_LOCK must be held by this context.
 unsafe fn cfs_rq_mut() -> &'static mut cfs::Runqueue {
     unsafe { &mut *addr_of_mut!(CFS_RQ) }
+}
+
+/// # Safety
+/// PTABLE_LOCK must be held by this context.
+unsafe fn rt_rq_mut() -> &'static mut rt::RtRunqueue {
+    unsafe { &mut *addr_of_mut!(RT_RQ) }
+}
+
+/// RT link -> containing proc (`container_of`).
+fn rt_proc_of(link: *mut rt::RtLink) -> *mut Proc {
+    let off = core::mem::offset_of!(Proc, rt_link);
+    ((link as usize) - off) as *mut Proc
+}
+
+/// Class-aware enqueue (RUNNABLE ⟺ in its class queue).
+///
+/// # Safety
+/// PTABLE_LOCK held; `p` is not queued in either class.
+unsafe fn enqueue_runnable(p: *mut Proc) {
+    // SAFETY: ptable lock held; p is ours.
+    unsafe {
+        if (*p).policy.is_rt() {
+            rt::push_tail(rt_rq_mut(), &mut (*p).rt_link, (*p).rt_prio);
+        } else {
+            cfs::enqueue_entity(cfs_rq_mut(), &mut (*p).se);
+        }
+    }
+}
+
+/// Pick the next proc: highest RT first, else the CFS front.
+///
+/// # Safety
+/// PTABLE_LOCK held; the returned proc is dequeued and RUNNING-able.
+unsafe fn pick_next_proc() -> *mut Proc {
+    // SAFETY: ptable lock held; RT list nodes are live.
+    unsafe {
+        let rtq = rt_rq_mut();
+        if let Some(prio) = rt::front_prio(rtq) {
+            let link = rt::front(rtq);
+            rt::unlink(rtq, link, prio);
+            let p = rt_proc_of(link);
+            if (*p).policy == SchedPolicy::Rr {
+                (*p).rt_ticks_left = rt::RT_RR_QUANTUM_TICKS;
+            }
+            return p;
+        }
+        let se = cfs::pick_next_entity(cfs_rq_mut());
+        if se.is_null() {
+            core::ptr::null_mut()
+        } else {
+            proc_of(se)
+        }
+    }
 }
 
 /// Monotonic clock at PIT tick granularity (100 Hz; TSC refinement is
@@ -146,11 +202,11 @@ unsafe fn requeue_and_sched(p: *mut Proc, boost: bool) {
     unsafe {
         let rq = cfs_rq_mut();
         cfs::update_curr(rq, &mut (*p).se, now_ns());
-        if boost {
+        if boost && !(*p).policy.is_rt() {
             cfs::yield_entity(rq, &mut (*p).se);
         }
         (*p).state = ProcState::RUNNABLE;
-        cfs::enqueue_entity(rq, &mut (*p).se);
+        enqueue_runnable(p);
         sched_raw();
     }
 }
@@ -181,6 +237,11 @@ pub fn sched_yield() {
 
 /// Timer tick on a user context: charge the slice, maybe preempt.
 /// Kernel-context ticks never call this (preemption off, ADR-0016).
+///
+/// RT rules (21 §2): FIFO keeps the CPU unless a strictly higher RT
+/// entity is runnable (preempted FIFO returns to its level's head); RR
+/// rotates to the tail on quantum expiry; any runnable RT preempts a
+/// CFS current unconditionally.
 pub fn entity_tick() {
     let p = myproc();
     if p.is_null() {
@@ -191,8 +252,34 @@ pub fn entity_tick() {
     unsafe {
         let rq = cfs_rq_mut();
         cfs::update_curr(rq, &mut (*p).se, now_ns());
-        if cfs::preempt_needed(rq, &(*p).se) {
-            requeue_and_sched(p, false);
+        let rtq = rt_rq_mut();
+        match (*p).policy {
+            SchedPolicy::Fifo => {
+                if rt::has_higher(rtq, (*p).rt_prio) {
+                    rt::push_head(rtq, &mut (*p).rt_link, (*p).rt_prio);
+                    (*p).state = ProcState::RUNNABLE;
+                    sched_raw();
+                }
+            }
+            SchedPolicy::Rr => {
+                if rt::has_higher(rtq, (*p).rt_prio) {
+                    rt::push_head(rtq, &mut (*p).rt_link, (*p).rt_prio);
+                    (*p).state = ProcState::RUNNABLE;
+                    sched_raw();
+                } else if (*p).rt_ticks_left > 0 {
+                    (*p).rt_ticks_left -= 1;
+                } else {
+                    // Quantum exhausted: rotate to the tail.
+                    rt::push_tail(rtq, &mut (*p).rt_link, (*p).rt_prio);
+                    (*p).state = ProcState::RUNNABLE;
+                    sched_raw();
+                }
+            }
+            SchedPolicy::Normal => {
+                if !rtq.is_empty() || cfs::preempt_needed(rq, &(*p).se) {
+                    requeue_and_sched(p, false);
+                }
+            }
         }
     }
     drop(guard);
@@ -205,10 +292,9 @@ pub fn entity_tick() {
 pub unsafe fn runnable_new(p: *mut Proc) {
     // SAFETY: ptable lock held; p is ours.
     unsafe {
-        let rq = cfs_rq_mut();
-        cfs::place_new_entity(rq, &mut (*p).se);
+        cfs::place_new_entity(cfs_rq_mut(), &mut (*p).se);
         (*p).state = ProcState::RUNNABLE;
-        cfs::enqueue_entity(rq, &mut (*p).se);
+        enqueue_runnable(p);
     }
 }
 
@@ -219,10 +305,42 @@ pub unsafe fn runnable_new(p: *mut Proc) {
 pub unsafe fn runnable_wake(p: *mut Proc) {
     // SAFETY: ptable lock held; p is ours.
     unsafe {
-        let rq = cfs_rq_mut();
-        cfs::place_wake_entity(rq, &mut (*p).se);
+        cfs::place_wake_entity(cfs_rq_mut(), &mut (*p).se);
         (*p).state = ProcState::RUNNABLE;
-        cfs::enqueue_entity(rq, &mut (*p).se);
+        enqueue_runnable(p);
+    }
+}
+
+/// Change a proc's scheduling class/priority (sched_setscheduler /
+/// sched_setparam backing). A RUNNABLE proc moves between its class
+/// queues; a RUNNING or sleeping target just updates fields (the tick
+/// path and later wake re-evaluate the class).
+///
+/// Caller validates `rt_prio` (0 for Normal, 1..=99 for RT).
+///
+/// # Safety
+/// PTABLE_LOCK held by the caller.
+pub unsafe fn set_sched_policy(p: *mut Proc, policy: SchedPolicy, rt_prio: i32) {
+    // SAFETY: ptable lock held; p is a live ptable slot.
+    unsafe {
+        if (*p).state == ProcState::RUNNABLE {
+            if (*p).policy.is_rt() {
+                rt::unlink(rt_rq_mut(), &mut (*p).rt_link, (*p).rt_prio);
+            } else {
+                cfs::dequeue_entity(cfs_rq_mut(), &mut (*p).se);
+            }
+        }
+        (*p).policy = policy;
+        (*p).rt_prio = if policy.is_rt() { rt_prio } else { 0 };
+        (*p).rt_ticks_left = 0;
+        if (*p).state == ProcState::RUNNABLE {
+            if !policy.is_rt() {
+                // Entering CFS: clamp to the floor so a stale vruntime
+                // cannot buy back the CPU (same shape as a wake).
+                cfs::place_wake_entity(cfs_rq_mut(), &mut (*p).se);
+            }
+            enqueue_runnable(p);
+        }
     }
 }
 
@@ -268,11 +386,9 @@ pub fn scheduler() -> ! {
         let mut found = false;
         // SAFETY: ptable lock held for the whole pick/switch window.
         unsafe {
-            let rq = cfs_rq_mut();
-            let se = cfs::pick_next_entity(rq);
-            if !se.is_null() {
+            let p = pick_next_proc();
+            if !p.is_null() {
                 found = true;
-                let p = proc_of(se);
                 (*p).state = ProcState::RUNNING;
                 (*p).se.exec_start = now_ns();
                 let cpu0 = addr_of_mut!(CPU0);

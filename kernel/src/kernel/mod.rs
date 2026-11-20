@@ -9,6 +9,7 @@ pub mod m0r;
 pub mod m2map;
 pub mod m2mem;
 pub mod m2suite;
+pub mod m3suite;
 pub mod oops;
 pub mod suite;
 pub mod sysarg;

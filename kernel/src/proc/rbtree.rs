@@ -60,7 +60,6 @@ impl Tree {
         self.count
     }
 
-    #[cfg(test)] // audit/model consumers (host-tests crate)
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

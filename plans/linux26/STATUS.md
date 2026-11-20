@@ -633,3 +633,42 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   preempt 入链符号位移；root `0611a2b6…d4c3` 不变）；**m2-suite 重钉
   `c3636c75…0b62`**（16 例）。
 - 决策：ADR-0016（抢占显式关闭 + tick 记账 + clamp 简化 + 宿主模型门）。
+### m3r-s2（RT FIFO/RR + sched syscall 族 + m3-suite，2026-11-20）
+
+- 交付：
+  - `proc/rt.rs`（新 ~170 行）——每优先级 FIFO 双端链（头/尾）+ `u128`
+    位图（bit=prio−1）；`push_tail/push_head/unlink/front/front_prio/
+    has_higher/is_empty`；宿主 `rttests.rs` 4 例（级序、队头抢占、RR
+    旋转、位图 off-by-one——该 bug 由宿主先行拦截）。
+  - `Proc` 增 `policy/rt_prio/rt_link/rt_ticks_left`；`SchedPolicy`
+    Normal=0/Fifo=1/Rr=2；fork 继承 policy/prio，freeproc 复位。
+  - `sched.rs`（293→409 行）——`RT_RQ` + `pick_next_proc`（RT 先于
+    CFS）+ 类感知 `enqueue_runnable`（RUNNABLE ⟺ 在本类队列）+ RT
+    `entity_tick`（FIFO/Rr/Normal 三臂：任何 runnable RT 抢占 CFS
+    当前体；RR 量子 10 tick 旋转）+ `set_sched_policy`（policy 迁移 =
+    出旧队入新队，RR 重置量子）。
+  - ABI `SYS_SCHED_SETPARAM(142)/GETPARAM(143)/SETSCHEDULER(144)/
+    GETSCHEDULER(145)/GET_PRIORITY_MAX(146)/GET_PRIORITY_MIN(147)`；
+    `syscall.rs` 六臂 + `sched_target/sched_valid`；锁纪律：PTABLE_LOCK
+    内快照，copyout 放锁后。
+  - m3-suite 上线：`kernel/m3suite.rs`（6 例策略级电池，boot 上下文，
+    cmdline `m3-suite`）+ `BootMode::M3Suite` + `scripts/m3-suite-grub.cfg`
+    + Makefile（`m3-suite-iso`/`test-qemu-m3`）+ runner `Suite::M3Suite`
+    （verdict/m3.rs，exit 33）。
+- 修 bug（QEMU 首跑拦截）：套件曾以裸 offset-0 强转从 `se`/`link` 指针
+  回收 `FakeEnt`——`#[repr(Rust)]` 布局在 host debug 与内核 release 下
+  字段重排不同，release 下 `se` 不在 0 偏移（RT 例的 `link` 恰在 0），
+  CFS 例读错 id、repr(C) 修复后 RT 例越界 oops；终修 = `offset_of!`
+  container_of（`ent_of_se`/`ent_of_link`，同 sched.rs `Proc` 惯例），
+  任意布局成立。红跑顺带实证 runner FAIL 判定与 kernel-oops FATAL 路径。
+- gate：make all/fmt/fmt-check/check-rust-only（roots=6 files=139）绿；
+  host-tests 48→**52**（rttests 4）+ runner 72 + tools 5；QEMU 全电池
+  **6 目标** PASS：m0r 6/6、m1r 20/20、m1r-user **39/39**（preempt
+  金丝雀绿）+ coverage active=39 not-active=1、m1r-fault 5/5、m2 16/16、
+  **m3-suite 6/6（首跑）**。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585`、m1r-user
+  serial `58452d31…48f0` 不变（m1r-user root 运行后像 `61cd7275…6138`）；
+  **m1r-fault 重钉 `e0b37b6e…48ea`**（rt/m3suite 入链符号位移；root
+  `0611a2b6…d4c3` 不变）；**m2-suite 重钉 `0baa40fb…3c32`**（16 例）；
+  **m3-suite 首钉 `ba629b98…4112`**（6 例）。
+- 决策：ADR-0017（见上）。

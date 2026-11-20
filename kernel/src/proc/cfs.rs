@@ -88,12 +88,11 @@ impl Runqueue {
         }
     }
 
-    #[cfg(test)] // model/audit consumers (host-tests crate)
+    #[cfg(test)] // model consumers (host-tests crate)
     pub fn len(&self) -> usize {
         self.tree.len()
     }
 
-    #[cfg(test)] // model/audit consumers (host-tests crate)
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
     }

@@ -117,8 +117,13 @@ pub unsafe fn freeproc(p: *mut Proc) {
     }
     (*p).cwd = null_mut();
     (*p).pid = 0;
-    // Fresh CFS identity for the reused slot (nice 0, empty history).
+    // Fresh CFS identity and Normal policy for the reused slot (nice 0,
+    // empty history; fork re-inherits policy/priority below).
     (*p).se = super::cfs::SchedEntity::new();
+    (*p).policy = super::SchedPolicy::Normal;
+    (*p).rt_prio = 0;
+    (*p).rt_link = super::rt::RtLink::new();
+    (*p).rt_ticks_left = 0;
     (*p).state = ProcState::UNUSED;
 }
 
@@ -258,6 +263,10 @@ pub fn fork() -> i32 {
                 (*np).ofile[fd] = crate::fs::file_table::filedup((*me).ofile[fd]);
             }
         }
+        // Linux fork semantics: the child inherits the scheduling class
+        // and RT priority (freeproc reset the slot to Normal/0 above).
+        (*np).policy = (*me).policy;
+        (*np).rt_prio = (*me).rt_prio;
         if !(*me).cwd.is_null() {
             (*np).cwd = crate::fs::xv6fs::inode::idup((*me).cwd);
         }

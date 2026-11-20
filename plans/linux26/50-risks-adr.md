@@ -127,6 +127,33 @@
 - 状态：已接受（host-tests m3tests/rbtreetests 10 例；QEMU 电池 5/5 含
   m1r-user 39/39；本条即 ADR-0016）。
 
+### ADR-0017 M3 RT（UP）：per-prio FIFO 链 + u128 位图，FIFO/RR 语义与 tick 界延迟
+- 背景：21 §2 s2——RT（FIFO/RR）先于 CFS 挑选；policy/prio 经
+  setscheduler/setparam 族暴露（Linux ABI 142–147）。
+- 决策：`proc/rt.rs`——每优先级一条 FIFO 双端链（头尾指针）+ `u128`
+  位图（bit = prio−1，`front_prio` = 最高置位位 + 1）；`SchedPolicy`
+  Normal=0/Fifo=1/Rr=2（`from_i64` 校验），`rt_prio` 1..=99；RR 量子
+  10 tick（100 ms）。`sched.rs`：`pick_next_proc` RT 先于 CFS；类感知
+  入队不变量（RUNNABLE ⟺ 在本类队列）；FIFO 被抢占 → `push_head`
+  （保持轮次），RR 量子耗尽 → 旋转到尾；tick 见任何 runnable RT 即
+  抢占 CFS 当前体。fork 继承 policy/prio；freeproc 复位。
+- 简化（有意，相对 Linux）：无 RT 带宽/节流（unbounded RT 可饿死 CFS，
+  同 Linux 未开 throttling 的语义，验收文档化）；无 IPI 重调度——重调度
+  延迟由 10 ms tick 界定（M8 SMP 前不做）；无 sched_rr_getinterval/
+  迁移/组调度；policy 迁移（setscheduler）= 出旧类队 + 入新类队，
+  RR 重置量子、FIFO 入尾。
+- 锁纪律：6 个 syscall 均在 PTABLE_LOCK 内快照 prio/policy，copyout
+  在放锁后（沿 M2 纪律）；两类就绪队列共用 PTABLE_LOCK，无新锁序。
+- QEMU 套件（m3suite，cmdline `m3-suite`）：策略级 6 例（pick 顺序/
+  tick 公平/RT 级序/FIFO 抢占回队头/RR 旋转/policy 接线）；**首跑抓到
+  `#[repr(Rust)]` 布局假设 bug**——套件以裸 offset-0 强转回收容器，
+  debug（host）与 release（内核）布局重排不同致读错字段/越界；修复 =
+  与 sched.rs `Proc` 相同的 `offset_of!` container_of 惯例
+  （`ent_of_se`/`ent_of_link`），任意布局下成立；该红跑顺带实证 runner
+  的 FAIL 判定路径与 kernel-oops FATAL 路径。
+- 状态：已接受（host rttests 4 例 + rbtreetests/m3tests；QEMU 电池
+  6 目标全 PASS 含 m3-suite 6/6、m1r-user 39/39 金丝雀）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |
