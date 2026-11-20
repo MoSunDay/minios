@@ -15,12 +15,12 @@ pub use abi::{ECHILD, EINTR, EINVAL, ENOENT, ENOMEM, ENOSYS, ESRCH};
 
 /// Linux x86-64 syscall numbers (abi crate re-export for dispatch match).
 use abi::{
-    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP, SYS_EXECVE,
-    SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK, SYS_FSTAT, SYS_GETPID, SYS_KILL, SYS_LINK, SYS_MKDIR,
-    SYS_MKNOD, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_PIPE, SYS_READ,
-    SYS_SCHED_GETPARAM, SYS_SCHED_GETSCHEDULER, SYS_SCHED_GET_PRIORITY_MAX,
-    SYS_SCHED_GET_PRIORITY_MIN, SYS_SCHED_SETPARAM, SYS_SCHED_SETSCHEDULER, SYS_SCHED_YIELD,
-    SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, SYS_ALARM, SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP,
+    SYS_EXECVE, SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK, SYS_FSTAT, SYS_GETPID, SYS_GETTIMEOFDAY,
+    SYS_KILL, SYS_LINK, SYS_MKDIR, SYS_MKNOD, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP,
+    SYS_OPEN, SYS_PIPE, SYS_READ, SYS_SCHED_GETPARAM, SYS_SCHED_GETSCHEDULER,
+    SYS_SCHED_GET_PRIORITY_MAX, SYS_SCHED_GET_PRIORITY_MIN, SYS_SCHED_SETPARAM,
+    SYS_SCHED_SETSCHEDULER, SYS_SCHED_YIELD, SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
 };
 
 /// C entry from the syscall stub (tf.rax = number, arg registers follow
@@ -41,6 +41,8 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         SYS_LINK => syspath::sys_link(a.arg_usize(0), a.arg_usize(1)),
         SYS_UNLINK => syspath::sys_unlink(a.arg_usize(0)),
         SYS_NANOSLEEP => sys_nanosleep(a.arg_usize(0)),
+        SYS_GETTIMEOFDAY => sys_gettimeofday(a.arg_opt_ptr(0)),
+        SYS_ALARM => sys_alarm(a.arg_i64(0)),
         SYS_SCHED_YIELD => {
             crate::proc::sched::sched_yield();
             0
@@ -71,7 +73,7 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
             // Full i32: the suite driver encodes (total<<8)|failed (S4e-2).
             crate::proc::proc::exit(a.arg_i32(0));
         }
-        SYS_WAIT4 => sys_wait4(a.wait_pid(0), a.arg_opt_ptr(1)),
+        SYS_WAIT4 => sys_wait4(a.wait_pid(0), a.arg_opt_ptr(1), a.arg_opt_ptr(3)),
         SYS_KILL => {
             if crate::proc::proc::kill(a.arg_i32(0)) == 0 {
                 0
@@ -191,9 +193,10 @@ fn sys_getpid() -> i64 {
 }
 
 /// wait4(2): reap one matching child; write the exit status through the
-/// optional user wstatus pointer (fixup-guarded copyout).
-fn sys_wait4(pid: i32, wstatus: Option<usize>) -> i64 {
-    let (reaped, xstate) = crate::proc::proc::wait_status(pid);
+/// optional user wstatus pointer and the child's CPU accounting through
+/// the optional user rusage pointer (both fixup-guarded copyouts).
+fn sys_wait4(pid: i32, wstatus: Option<usize>, rusage: Option<usize>) -> i64 {
+    let (reaped, xstate, exec_ns) = crate::proc::proc::wait_status(pid);
     if reaped < 0 {
         return ECHILD;
     }
@@ -202,6 +205,21 @@ fn sys_wait4(pid: i32, wstatus: Option<usize>) -> i64 {
         // (WEXITSTATUS); the M1R kernel has no signals yet.
         let wstatus_val: i32 = (xstate & 0xff) << 8;
         let r = uaccess::copyout(dst as *mut u8, &wstatus_val as *const i32 as *const u8, 4);
+        if r != 0 {
+            return r;
+        }
+    }
+    if let Some(dst) = rusage {
+        // Linux x86-64 struct rusage: ru_utime + ru_stime timeval pairs
+        // (16 B each) then 16 i64 fields = 144 B total. ru_utime carries
+        // the reaped child's scheduler-charged CPU ns; ru_stime and the
+        // counters stay 0 until accounting splits user/system (M8+).
+        let sec = (exec_ns / 1_000_000_000) as i64;
+        let usec = ((exec_ns % 1_000_000_000) / 1_000) as i64;
+        let mut ru = [0u8; 144];
+        ru[0..8].copy_from_slice(&sec.to_le_bytes());
+        ru[8..16].copy_from_slice(&usec.to_le_bytes());
+        let r = uaccess::copyout(dst as *mut u8, ru.as_ptr(), 144);
         if r != 0 {
             return r;
         }
@@ -396,9 +414,76 @@ fn sys_sched_prio_bound(policy: i64, max: bool) -> i64 {
     }
 }
 
-/// nanosleep(2) (Linux x86-64 ABI 35): park on the ticks channel until
-/// the deadline passes (xv6 sys_sleep loop against tickslock). No signal
-/// delivery exists in M1R, so the return is always 0 on success.
+/// gettimeofday(2) (Linux x86-64 96): report the wall clock. There is
+/// no RTC until M8+, so wall = boot_epoch(0) + monotonic (ADR-0019).
+/// tv NULL is accepted (no copyout); tz is ignored.
+fn sys_gettimeofday(tv: Option<usize>) -> i64 {
+    let ns = crate::kernel::time::clocksource::wall_ns();
+    let sec = (ns / 1_000_000_000) as i64;
+    let usec = ((ns % 1_000_000_000) / 1_000) as i64;
+    if let Some(dst) = tv {
+        let mut ts = [0u8; 16];
+        ts[0..8].copy_from_slice(&sec.to_le_bytes());
+        ts[8..16].copy_from_slice(&usec.to_le_bytes());
+        let r = uaccess::copyout(dst as *mut u8, ts.as_ptr(), 16);
+        if r != 0 {
+            return r;
+        }
+    }
+    0
+}
+
+/// alarm(2) (37): arm the process alarm wheel timer; returns the whole
+/// seconds (rounded up) remaining on the previous alarm, 0 if none.
+/// seconds == 0 cancels. Until SIGALRM (s6), expiry is xv6-kill.
+fn sys_alarm(seconds: i64) -> i64 {
+    let p = crate::proc::proc::myproc();
+    if p.is_null() {
+        return 0;
+    }
+    // SAFETY: myproc() is the running process; the alarm field is
+    // exclusively ours and the wheel lock is a leaf (ptable not held).
+    unsafe {
+        let prev = if (*p).alarm.queued() {
+            let rem = (*p)
+                .alarm
+                .expires()
+                .saturating_sub(crate::kernel::time::wheel::jiffies());
+            (rem + 99) / 100
+        } else {
+            0
+        };
+        if seconds < 0 {
+            return EINVAL;
+        }
+        if seconds == 0 {
+            if (*p).alarm.queued() {
+                crate::kernel::time::wheel::del_timer(&mut (*p).alarm);
+            }
+        } else {
+            // Linux retruncates oversize alarms; here the deadline clamps
+            // to the wheel horizon (tv5 placement beyond it is imprecise).
+            let offset = (seconds as u64)
+                .saturating_mul(100)
+                .min(crate::kernel::time::wheel::WHEEL_HORIZON);
+            let expires = crate::kernel::time::wheel::jiffies().saturating_add(offset);
+            crate::kernel::time::wheel::add_timer(
+                &mut (*p).alarm,
+                expires,
+                crate::proc::proc::alarm_fire,
+            );
+        }
+        prev as i64
+    }
+}
+
+/// nanosleep(2) (35): park on an on-stack hrtimer until the monotonic
+/// deadline. The callback must take TICK_LOCK before the wakeup so the
+/// check-then-sleep window stays atomic against the expiry (a fire in
+/// that window blocks on the sleeper's TICK_LOCK and its wakeup then
+/// observes the sleeper — no missed wake). Cancelled on every return so
+/// the on-stack timer never outlives the call; a killed sleeper aborts
+/// with EINTR (xv6-visible).
 fn sys_nanosleep(req: usize) -> i64 {
     let mut ts = [0u8; 16];
     match uaccess::copyin(ts.as_mut_ptr(), req as *const u8, 16) {
@@ -410,31 +495,57 @@ fn sys_nanosleep(req: usize) -> i64 {
     if nsec < 0 || nsec >= 1_000_000_000 || sec < 0 {
         return EINVAL;
     }
-    // 100 Hz PIT: whole ticks, at least one for any nonzero request.
-    let dur = (sec as u64) * 100 + (nsec as u64) / 10_000_000;
-    let deadline = crate::kernel::time::ticks() + dur.max(1);
-    // SAFETY: balanced TICK_LOCK acquire/release around each sleep; the
-    // channel is woken from the timer interrupt under the same lock.
+    let dur_ns = (sec as u64) * 1_000_000_000 + nsec as u64;
+    if dur_ns == 0 {
+        return 0;
+    }
+    let mut timer = crate::kernel::time::hrtimer::HrTimer::new();
+    let deadline = crate::kernel::time::clocksource::monotonic_ns().saturating_add(dur_ns);
+    // One channel for the sleep and the callback to agree on byte-for-byte.
+    let chan = (&mut timer as *mut _) as usize;
+    // SAFETY: timer outlives every armed window (cancelled on all returns).
     unsafe {
+        crate::kernel::time::hrtimer::hrtimer_start(
+            &mut timer,
+            deadline,
+            crate::kernel::time::hrtimer::HrMode::Abs,
+            nanosleep_wake,
+        );
+        let p = crate::proc::proc::myproc();
         loop {
+            // SAFETY: balanced TICK_LOCK around each sleep check (same
+            // protocol as the previous ticks-channel implementation).
             crate::kernel::time::TICK_LOCK.raw_lock();
-            if crate::kernel::time::ticks() >= deadline {
+            if crate::kernel::time::clocksource::monotonic_ns() >= deadline {
                 crate::kernel::time::TICK_LOCK.raw_release();
                 break;
             }
-            crate::proc::sleep::sleep(
-                crate::kernel::time::ticks_chan(),
-                &crate::kernel::time::TICK_LOCK,
-            );
-            // SAFETY: sleep returns with TICK_LOCK held.
-            crate::kernel::time::TICK_LOCK.raw_release();
             // xv6 sys_sleep: a killed sleeper aborts (EINTR); the next
-            // timer trap from user mode exits it (traps_dispatch).
-            let p = crate::proc::proc::myproc();
+            // trap from user mode exits it (traps_dispatch).
             if !p.is_null() && (*p).killed != 0 {
+                crate::kernel::time::TICK_LOCK.raw_release();
+                crate::kernel::time::hrtimer::hrtimer_cancel(&mut timer);
                 return EINTR;
             }
+            crate::proc::sleep::sleep(chan, &crate::kernel::time::TICK_LOCK);
+            // SAFETY: sleep returns with TICK_LOCK held.
+            crate::kernel::time::TICK_LOCK.raw_release();
         }
+        crate::kernel::time::hrtimer::hrtimer_cancel(&mut timer);
     }
     0
+}
+
+/// nanosleep wakeup (hrtimer callback): take TICK_LOCK around the
+/// channel wakeup so the sleeper's check-then-sleep window stays atomic
+/// against the expiry.
+fn nanosleep_wake(t: *mut crate::kernel::time::hrtimer::HrTimer) {
+    // Balanced TICK_LOCK acquire/release (timer-interrupt context; the
+    // discipline matches time::tick's own wakeup).
+    // SAFETY: same lock discipline as time::tick.
+    unsafe {
+        crate::kernel::time::TICK_LOCK.raw_lock();
+        crate::proc::sleep::wakeup(t as usize);
+        crate::kernel::time::TICK_LOCK.raw_release();
+    }
 }

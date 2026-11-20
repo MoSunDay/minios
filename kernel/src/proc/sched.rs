@@ -133,11 +133,11 @@ unsafe fn pick_next_proc() -> *mut Proc {
     }
 }
 
-/// Monotonic clock at PIT tick granularity (100 Hz; TSC refinement is
-/// the s4 time layer). Reads TICKS without extra locking: the load is
-/// atomic and only used for slice accounting.
+/// Monotonic clock from the time layer (TSC after calibration; jiffies
+/// fallback early in boot). slice accounting precision tracks the
+/// active clocksource.
 fn now_ns() -> u64 {
-    crate::kernel::time::ticks() * 10_000_000
+    crate::kernel::time::clocksource::monotonic_ns()
 }
 
 /// Entity → containing proc (`container_of`).

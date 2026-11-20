@@ -83,6 +83,11 @@ pub struct Proc {
     pub rt_ticks_left: i32,
     /// Wait-queue link (21 §3): a UP proc sleeps on at most one queue.
     pub wait_link: waitqueue::WaitLink,
+    /// POSIX alarm(2) timer (21 §4): one wheel timer per process; the
+    /// callback recovers the Proc through offset_of!(Proc, alarm).
+    pub alarm: crate::kernel::time::wheel::LrTimer,
+    /// Set by the alarm callback until SIGALRM delivery exists (s6).
+    pub alarm_fired: i32,
     pub parent: *mut Proc,
     pub mm: Option<Mm>,
     pub tf: *mut Trapframe,
@@ -117,6 +122,8 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
         rt_link: rt::RtLink::new(),
         rt_ticks_left: 0,
         wait_link: waitqueue::WaitLink::new(),
+        alarm: crate::kernel::time::wheel::LrTimer::new(),
+        alarm_fired: 0,
         parent: core::ptr::null_mut(),
         mm: None,
         tf: core::ptr::null_mut(),

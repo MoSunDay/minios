@@ -181,6 +181,54 @@
   中摘幂等；m1r-user 39/39 **串口钉值跨迁移字节不变**——pipe/wait/kill
   全契约保持的直接证据）。
 
+### ADR-0019 M3 时间层（UP）：clocksource/hrtimer/wheel 三层 + syscall 集成，亚 tick 精度与 RTC 延后
+- 背景：21 §4——时间层为 CFS 记账与 nanosleep/alarm/gettimeofday/wait4
+  -rusage 提供地基；PIT 周期 tick 是唯一时钟事件源（LAPIC one-shot
+  延后 M8）。
+- 结构：`kernel/time/` 模块五件套（原 kernel/time.rs 48 行拆分）：
+  - clocksource.rs：TSC + PIT 校准（`calibrate_tsc` 忙等窗口内
+    sti/cli——校准循环必须能被 IRQ0 打断退出，否则 boot 死锁 #1）；
+    `cycles_to_ns_with(delta, per)` 纯函数 + cycles_to_ns 委托（宿主
+    可测）。
+  - clockevents.rs：时钟事件设备骨架 + CLOCK_EVT_FEAT_ONESHOT
+    （M8: LAPIC one-shot 编程，暂 dead_code 标注）。
+  - hrtimer.rs：Abs/Rel 到期有序链（UP 规模 O(n) 插入换实现简单，
+    红黑树不必要），`run_expired(now)` 显式 now 驱动（确定性，无需
+    IRQ）；Rel 支持重挂载重排。
+  - wheel.rs：经典 tv1–tv5 级联轮（256/64/64/64/64 桶，
+    WHEEL_HORIZON = 1<<26 jiffies），LrTimer + add_timer/del_timer/
+    expires()/jiffies()；**过期停泊语义**：past-expiry 定时器落 tv1
+    桶 `jiffies & 255`，索引转回时才触发（≈256 tick 后）而非下一
+    tick——Linux 同源行为，host 测试 wheel_past_expiry_runs_on_revisit
+    固化。
+  - mod.rs：init_time（PIT 周期模式 → unmask → calibrate_tsc）+
+    tick()（jiffies 推进 + wheel 级联 + hrtimer run_expired）。
+- **关键教训（boot 死锁 #2，指纹 pic0 irr=01 imr=fb）**：
+  `pic::unmask(IRQ_TIMER as u8)` 把向量号 32 当 IRQ 线号传入——
+  unmask(32) 走从片路径：清主片 bit2（级联）且 `1u8 << (32-8)` =
+  1u8<<24 **回绕到 bit0** → 从片 IRQ8 被开、IRQ0 仍被屏蔽 → PIT
+  永不送达 → calibrate_tsc 死转，所有 m1r_boot 模式挂死在 GRUB
+  横幅。正确惯用法 `pic::unmask((IRQ_TIMER - IRQ_BASE) as u8)`
+  （ide.rs 同款）。教训：u8 移位回绕无任何断言，裸线号 API 的
+  调用点必须显式做向量→线号换算。
+- 简化（有意）：
+  - boot_epoch_ns=0（无 RTC/CMOS 读取，wall-clock 延后到 RTC 驱动
+    里程碑）；gettimeofday 返回 monotonic 语义 ns。
+  - 亚 tick 精度延后 M8（LAPIC one-shot）；hrtimer 到期由 tick()
+    驱动——nanosleep 短睡按 tick 粒度对齐。
+  - wheel（睡长觉）与 hrtimer（高精度接口）双轨并存，Linux 同构。
+- syscall 集成：SYS_gettimeofday(96)（16B timeval，NULL 合法）、
+  SYS_alarm(37)（wheel LrTimer 宿主 Proc.alarm，到期 cb alarm_fire
+  置 alarm_fired 后 kill_proc；prev 剩余 = expires()-jiffies() 向上
+  取整，0 取消，WHEEL_HORIZON 钳制，负数 EINVAL）、SYS_wait4 增
+  rusage（144B，ru_utime 自 sum_exec_ns——exit 前 wait_status 三元组
+  捕获，防 freeproc 抹账）、SYS_nanosleep 重写于栈上 HrTimer（Abs
+  截止，chan=定时器地址一次计算，nanosleep_wake cb 先取 TICK_LOCK
+  再唤醒——防丢醒；一切返回路径含 EINTR 均取消定时器）。
+- 状态：已接受（host timetests 9 例 58→67；m3-suite 扩至 11 例
+  +3 time；m1r-user 39/39 串口钉值跨 nanosleep 重写字节不变——
+  对用户态契约无扰动的直接证据）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

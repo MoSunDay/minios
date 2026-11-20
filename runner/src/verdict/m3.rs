@@ -21,6 +21,9 @@ pub fn m3_suite_spec() -> SuiteSpec {
             "m3.sched.policy_wiring",
             "m3.wq.wake_policy",
             "m3.wq.unlink_middle",
+            "m3.time.clock_layer_wiring",
+            "m3.time.hrtimer_order_cancel",
+            "m3.time.wheel_cascade",
         ],
     }
 }

@@ -707,3 +707,48 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   `537075a3…4c26`**；**m3-suite 重钉 `c4dd5ecc…1a40`**（8 例）。
 - 决策：ADR-0018（纯链表层 + Linux 唤醒纪律 + ERESTARTSYS 回卷；
   chan 原语保留，console/ide/bcache/ilock/log 后续机会迁移）。
+
+### m3r-s4（时间层：clocksource/hrtimer/wheel + alarm/gettimeofday/rusage/nanosleep 重写，2026-11-20）
+
+- 交付：
+  - `kernel/time/` 模块五件套（原 kernel/time.rs 48 行拆分，755 行）：
+    clocksource（TSC + PIT 校准，校准窗口 sti/cli——boot 死锁 #1 修复；
+    cycles_to_ns_with 纯函数）/ clockevents（骨架 + ONESHOT 标注 M8）/
+    hrtimer（Abs/Rel 有序链，run_expired 显式 now 驱动）/ wheel
+    （tv1–tv5 级联，WHEEL_HORIZON=1<<26，past-expiry 停泊语义）/
+    mod.rs（init_time + tick()）。
+  - **boot 死锁 #2 修复（向量当线号）**：init_time 原以
+    `pic::unmask(IRQ_TIMER as u8)` 传向量 32——从片路径回绕
+    `1u8<<24`→bit0，从片 IRQ8 被开而 IRQ0 仍屏蔽 → PIT 永不送达 →
+    calibrate_tsc 死转，全部 m1r_boot 模式挂死 GRUB 横幅（指纹
+    pic0 irr=01 imr=fb）；改 `pic::unmask((IRQ_TIMER - IRQ_BASE) as
+    u8)`（ide.rs 惯用法）。
+  - syscall：SYS_gettimeofday(96)（16B timeval，NULL 合法）、
+    SYS_alarm(37)（Proc.alarm 宿主 LrTimer，alarm_fire→alarm_fired
+    +kill_proc；prev 剩余向上取整、WHEEL_HORIZON 钳制、负数
+    EINVAL）、SYS_wait4 增 rusage（144B，ru_utime 自 sum_exec_ns，
+    exit 前 wait_status 三元组捕获防 freeproc 抹账）、SYS_nanosleep
+    重写于栈上 HrTimer（Abs 截止 + nanosleep_wake 先取 TICK_LOCK 防
+    丢醒 + 全返回路径取消）。
+  - proc：alarm/alarm_fired 字段（freeproc 复位、exit 先 del_timer）、
+    kill_proc 抽取、exit 前捕获 exec_ns。
+  - m3-suite 扩 3 例（`m3.time.clock_layer_wiring`/
+    `m3.time.hrtimer_order_cancel`/`m3.time.wheel_cascade`——真实
+    300 tick 级联），8→11；runner 同步。
+  - 宿主 timetests 9 例（wheel 阈值/桶位/级联精确触发/del 阻燃/
+    past-expiry 重访、hrtimer 顺序/取消竞态/Rel 重排），58→67；
+    host-tests 增 time.rs shim（TICKS stand-in + #[path] 引真源码，
+    Spinlock/io shim 进 lib.rs——内核零改动可宿主测）。
+- gate：make all（0 warning）/fmt/fmt-check/check-rust-only（files=
+  147）绿；host-tests 58→**67** + runner 72 + tools 5；QEMU 电池
+  6 目标 PASS：m0r 6/6、m1r 20/20、m1r-user **39/39（跨 nanosleep
+  重写串口钉值字节不变）**+ coverage active=39 not-active=1、
+  m1r-fault 5/5、m2 16/16、m3-suite **11/11**。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585`、m1r-user
+  serial `58452d31…48f0`/root `61cd7275…6138` 不变；**m1r-fault
+  重钉 `909613e4…7ec4f`**（backtrace 符号偏移随代码布局移位，
+  root.raw `0611a2b6…d4c3` 不变）、**m2-suite 重钉 `8ad5b441…8a14`**
+  （vma.layout 动态地址随布局移位）、**m3-suite 重钉
+  `39f1576a…69006`**（8→11 例）；三者均二连跑字节稳定。
+- 决策：ADR-0019（三层时间结构 + 过期停泊语义 + 向量/线号教训；
+  亚 tick 精度与 RTC wall-clock 延后 M8）。

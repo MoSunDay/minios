@@ -127,6 +127,10 @@ pub unsafe fn freeproc(p: *mut Proc) {
     // The wait link must be unqueued: exit paths dequeue, but a killed
     // slot's link is guaranteed fresh regardless.
     (*p).wait_link = super::waitqueue::WaitLink::new();
+    // Same for the alarm: exit() dequeued the timer, and slots reach
+    // freeproc only through exit — the reset is belt-and-braces.
+    (*p).alarm = crate::kernel::time::wheel::LrTimer::new();
+    (*p).alarm_fired = 0;
     (*p).state = ProcState::UNUSED;
 }
 
@@ -185,9 +189,12 @@ pub fn wait() -> i32 {
 }
 
 /// wait4-style reap: pid > 0 targets that child, pid <= 0 takes any.
-/// Returns (pid, exit status) or (-1, 0) when childless/killed.
-/// The lock is acquired once; sleep() transfers it across the swtch.
-pub fn wait_status(want_pid: i32) -> (i32, i32) {
+/// Returns (pid, exit status, exec ns) or (-1, 0, 0) when
+/// childless/killed; the third element is the reaped child's
+/// scheduler-charged CPU ns (rusage ru_utime source; charged at
+/// tick/switch granularity). The lock is acquired once; sleep()
+/// transfers it across the swtch.
+pub fn wait_status(want_pid: i32) -> (i32, i32, u64) {
     let _guard = PTABLE_LOCK.lock();
     let me = myproc();
     loop {
@@ -207,14 +214,15 @@ pub fn wait_status(want_pid: i32) -> (i32, i32) {
                 if (*p).state == ProcState::ZOMBIE {
                     let pid = (*p).pid;
                     let xstate = (*p).xstate;
+                    let exec_ns = (*p).se.sum_exec_ns;
                     freeproc(p);
                     drop(_guard);
-                    return (pid, xstate);
+                    return (pid, xstate, exec_ns);
                 }
             }
             if !have_kids || (*me).killed != 0 {
                 drop(_guard);
-                return (-1, 0);
+                return (-1, 0, 0);
             }
             // Sleep on the reap wait queue (interruptible: ERESTARTSYS
             // rewinds wait4, whose entry path sees killed and answers
@@ -297,25 +305,59 @@ pub fn fork() -> i32 {
 
 /// Mark `pid` killed; the next trap/sched path exits it.
 pub fn kill(pid: i32) -> i32 {
-    let _guard = PTABLE_LOCK.lock();
-    // SAFETY: ptable lock held.
-    unsafe {
-        let table = super::ptable_mut();
-        for i in 0..NPROC {
-            let p = &mut table[i] as *mut Proc;
-            if (*p).pid == pid {
-                (*p).killed = 1;
-                if (*p).state == ProcState::SLEEPING {
-                    // SAFETY: ptable lock held; p sleeps in this context.
-                    sched::runnable_wake(p);
+    // Scan under the ptable lock, then delegate the mark to kill_proc
+    // (which takes the lock itself — never nested here).
+    let target = {
+        let _guard = PTABLE_LOCK.lock();
+        // SAFETY: ptable lock held.
+        unsafe {
+            let table = super::ptable_mut();
+            let mut found = null_mut();
+            for i in 0..NPROC {
+                let p = &mut table[i] as *mut Proc;
+                if (*p).pid == pid {
+                    found = p;
+                    break;
                 }
-                drop(_guard);
-                return 0;
             }
+            found
+        }
+    };
+    if target.is_null() {
+        -1
+    } else {
+        kill_proc(target);
+        0
+    }
+}
+
+/// xv6 kill() body for a known slot: mark killed and wake a sleeper.
+/// Safe from timer-interrupt context: ptable-lock holders run with
+/// interrupts disabled, so acquiring the lock here cannot self-deadlock
+/// (the same discipline time::tick's wakeup already relies on).
+pub fn kill_proc(p: *mut Proc) {
+    let _guard = PTABLE_LOCK.lock();
+    // SAFETY: ptable lock held; the slot stays pinned by the caller.
+    unsafe {
+        (*p).killed = 1;
+        if (*p).state == ProcState::SLEEPING {
+            // SAFETY: ptable lock held; p sleeps in this context.
+            sched::runnable_wake(p);
         }
     }
-    drop(_guard);
-    -1
+}
+
+/// alarm(2) expiry (wheel callback): until signals exist (s6) the
+/// delivery is the xv6-kill contract — mark alarm_fired + killed and
+/// wake the sleeper; the process exits at its next user trap.
+pub fn alarm_fire(t: *mut crate::kernel::time::wheel::LrTimer) {
+    let p = ((t as usize) - core::mem::offset_of!(Proc, alarm)) as *mut Proc;
+    // SAFETY: the timer is the Proc's own alarm field; slot alive.
+    unsafe {
+        let _guard = PTABLE_LOCK.lock();
+        (*p).alarm_fired = 1;
+    }
+    kill_proc(p);
 }
 
 /// User-mode fault path: report already printed; exit without returning.

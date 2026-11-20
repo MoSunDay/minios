@@ -77,7 +77,7 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
     arch::x86_64::cpu::init(core::ptr::addr_of!(_boot_stack_top) as usize);
     kernel::traps::init_idt();
     drivers::pic::init();
-    kernel::time::init_pit();
+    kernel::time::init_time();
     drivers::pic::unmask(0); // timer only
     proc::fpu::init_fpu();
     // Record CR3 before frame::init: the direct-map extension walks the
