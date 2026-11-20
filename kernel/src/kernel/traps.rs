@@ -243,6 +243,12 @@ pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
         v if v < IRQ_BASE => fixup_or_oops(tf, "kernel exception"),
         _ => fixup_or_oops(tf, "unexpected trap"),
     }
+    // 2.6 irq_exit: hardware IRQ paths raise bottom halves; run them
+    // before returning (IF still masked — our do_softirq keeps IRQs
+    // disabled, a UP simplification vs Linux re-enabling; ADR-0020).
+    if tf.vector >= IRQ_BASE {
+        super::softirq::irq_exit();
+    }
 }
 
 /// C entry from the syscall stub.

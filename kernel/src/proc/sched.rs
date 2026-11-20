@@ -407,3 +407,47 @@ pub fn scheduler() -> ! {
         }
     }
 }
+
+/// Inline scheduler drive for boot-context suites (m3): runs runnable
+/// procs on the caller's stack, borrowing CPU0.scheduler as the
+/// swtch-back context, until `stop()` holds (a ptable-lock-free probe),
+/// the step budget runs out, or nothing is runnable. Returns true iff
+/// stop() held. Same pick/switch window as scheduler(), but it returns
+/// instead of idling in sti/hlt — deterministic, IRQ-quiet stepping.
+/// Must never run concurrently with scheduler().
+pub fn sched_drive(stop: fn() -> bool, max_steps: usize) -> bool {
+    let mut steps = 0usize;
+    loop {
+        if stop() {
+            io::cli();
+            return true;
+        }
+        io::sti();
+        let guard = PTABLE_LOCK.lock();
+        // SAFETY: ptable lock held for the whole pick/switch window
+        // (same window as scheduler()).
+        unsafe {
+            let p = pick_next_proc();
+            if p.is_null() {
+                drop(guard);
+                io::cli();
+                return false;
+            }
+            (*p).state = ProcState::RUNNING;
+            (*p).se.exec_start = now_ns();
+            let cpu0 = addr_of_mut!(CPU0);
+            (*cpu0).proc = p;
+            switchuvm(p);
+            fpu::restore(&(*p).fpu);
+            swtch(&mut (*cpu0).scheduler, &(*p).context);
+            fpu::save(&(*p).fpu);
+            switchkvm();
+        }
+        drop(guard);
+        steps += 1;
+        if steps >= max_steps {
+            io::cli();
+            return false;
+        }
+    }
+}

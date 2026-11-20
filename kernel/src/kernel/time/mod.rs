@@ -49,24 +49,35 @@ pub fn legacy_init_pit() {
 /// (~50 ms busy wait).
 pub fn init_time() {
     clockevents::init_periodic();
+    // Single timebase (ADR-0020): the wheel advances one jiffy per
+    // TIMER_SOFTIRQ at IRQ exit and cannot catch up, so the handler
+    // must be live before the first tick is delivered — ticks raised
+    // during TSC calibration with no handler registered would be lost
+    // to the wheel and WHEEL.jiffies would lag TICKS forever.
+    // SAFETY: boot init; the IRQ line is still masked, nothing pending.
+    unsafe { super::softirq::open_softirq(super::softirq::TIMER_SOFTIRQ, timer_softirq, 0) };
     crate::drivers::pic::unmask((IRQ_TIMER - IRQ_BASE) as u8);
     clocksource::calibrate_tsc(5);
 }
 
-/// Timer interrupt: jiffies++, expire hrtimers and wheel timers, wake
-/// tick-channel sleepers, and preempt user contexts.
+/// TIMER_SOFTIRQ body: expire hrtimers and cascade/fire the wheel.
+fn timer_softirq(_data: usize) {
+    let now_ns = clocksource::monotonic_ns();
+    // SAFETY: bh-disabled softirq context; callbacks wake sleepers only.
+    unsafe {
+        hrtimer::run_expired(now_ns);
+        wheel::wheel_tick(ticks());
+    }
+}
+
+/// Timer interrupt: jiffies++, raise TIMER_SOFTIRQ (expiry dispatch
+/// runs at IRQ exit), wake tick-channel sleepers, preempt user contexts.
 pub fn tick(tf: &mut Trapframe) {
     crate::drivers::pic::eoi((IRQ_TIMER) as u8);
     let now = TICKS.fetch_add(1, Ordering::SeqCst) + 1;
     super::syscall::on_tick(now);
-    // Monotonic now for expiry dispatch (jiffies may lag the clocksource
-    // by up to one period; hrtimers compare absolute ns).
-    let now_ns = clocksource::monotonic_ns();
-    // SAFETY: timer-interrupt context; callbacks wake sleepers only.
-    unsafe {
-        hrtimer::run_expired(now_ns);
-        wheel::wheel_tick(now);
-    }
+    // SAFETY-free raise: bottom half deferred to irq_exit (21 §3).
+    super::softirq::raise_softirq(super::softirq::TIMER_SOFTIRQ);
     // Wake nanosleep sleepers (they re-check their deadline under
     // TICK_LOCK; xv6 wakeup(&ticks)) and preempt user contexts.
     // SAFETY: plain lock acquire/release in interrupt context.

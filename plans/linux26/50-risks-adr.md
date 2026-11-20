@@ -229,6 +229,71 @@
   +3 time；m1r-user 39/39 串口钉值跨 nanosleep 重写字节不变——
   对用户态契约无扰动的直接证据）。
 
+### ADR-0020 M3 s5（UP）：softirq/tasklet/ksoftirqd + workqueue + kthread，时间层单时基不变量
+
+- 背景：21 §3——中断底半部与内核线程基础设施：hardirq 只置位
+  （raise），重活延后到 IRQ 出口或进程上下文；kthread 是 RCU（s7）
+  与 writeback（M5）的执行体地基。
+- 结构：
+  - `kernel/softirq.rs`：2.6.11 索引（HI=0/TIMER=1/NET_TX=2/
+    NET_RX=3/TASKLET=5，NR_SOFTIRQS=6）；静态 vec/data 槽 + PENDING
+    原子位图；open/raise/pending；`do_softirq`（in_softirq 深度
+    守卫 + local_bh_disable、MAX_SOFTIRQ_RESTART=10、升索引
+    run_mask 快照分发、预算耗尽唤醒 ksoftirqd）；traps_dispatch
+    在 `vector >= IRQ_BASE` 的 IRQ 出口统一钩 `irq_exit()`。
+    tasklet 走 TASKLET/HI 两条表（SCHED 位去重、先清位再跑——
+    自重排合法、禁用项跳过）。ksoftirqd 内核线程：排空循环 +
+    空转 wq_sleep 停泊（条件是原子位图，waker 不取该锁）+
+    interrupted 退出路径。
+  - `kernel/workqueue.rs`：events 静态队列（FIFO + WorkStruct
+    pending 去重 + more/done 双等待队列 + 惰性 events worker
+    kthread）；flush_work 睡 done 至"表空且非运行"；schedule_work
+    简写（M5 writeback 消费，暂 dead_code 标注）。
+  - `proc/kthread.rs`：kthread_create/run/reap + naked
+    `_kthread_trampoline`（对齐后 call kthread_body；body 里
+    raw_release + sti 后跑 fn(arg)，返回值走 exit(code)）。
+  - `proc/preempt.rs`：preempt_count 低 8 位抢占位 + 位 8-15
+    softirq/BH 深度（2.6 布局缩影；sched_raw 审计 preemptible）。
+  - `kernel/time/mod.rs`：tick() 只 raise TIMER_SOFTIRQ；到期分发
+    （hrtimer run_expired + wheel_tick）移入 timer_softirq 处理器，
+    IRQ 出口执行——jiffies 语义与 s4 相同（tick 内递增后才分发）。
+- **关键教训 1（swtch 镜像槽序与压栈序相反）**：ctx_sp 内存像
+  `[r15][r14][r13][r12][rbx][rbp][resume-ret][next-ret]`——
+  swtch.S 压 rbp..r15、弹 r15..rbp、ret 弹槽 6；kthread 种子
+  slot2=arg(r13)、slot3=fn(r12)、slot6=trampoline。allocproc 注释
+  按 PUSH 序罗列寄存器，易误读为槽序。首跑 fn/arg 反置 →
+  kthread_body(0, fn) 经 0 间接调用 → oops `rip=?0x1`
+  （指纹：rax=1 写故障）。GDB 断点核验后修正。
+- **关键教训 2（单时基不变量：softirq 处理器先于首 tick 就位）**：
+  wheel_tick 每次调用恰推进 1 jiffy（空桶即断、无追赶循环——
+  Linux 形状）；s5 把到期分发从 tick() 内联挪到 TIMER_SOFTIRQ 后，
+  init_time 若在 calibrate_tsc（~5 tick 的开窗忙等）之后才
+  open_softirq，校准窗内的 tick raise 了却无人分发 → WHEEL.jiffies
+  永久滞后 TICKS 5 拍 → 以 TICKS 为时基装填的 m3.time.wheel_cascade
+  在等待窗内永不触发（等待窗 expires+2 早于轮到位）。修正：
+  open_softirq 提前到 unmask/校准之前——TICKS 与 WHEEL.jiffies
+  自第一拍起 1:1。调试指纹：GDB 证明 timer_softirq 每拍都进
+  （入口 pc=0x100=BH 深度）而 wheel_probe 不响、WHEEL.jiffies
+  纹丝不动——注意 Rust 会重排结构体字段，jiffies 实际在
+  WHEEL+0x1000 而非 +0（读错字段是调试干扰项）。
+- 简化（有意，与 Linux 分歧）：
+  - do_softirq 全程 IF 屏蔽（Linux 处理期间重开本地中断）——UP
+    简化，重启预算兜底活锁；
+  - raise_softirq 不从 hardirq 直接唤醒 ksoftirqd（Linux
+    wakeup_softirqd 可在 irq 上下文调度唤醒）——仅预算耗尽或
+    进程上下文 raise 唤醒，避免 hardirq 路径触碰调度器；
+  - 禁用（count>0）tasklet 跳过不重排队（Linux 挂回表尾）；
+  - workqueue 惰性单 worker（非 per-cpu pool + manager）；
+    flush_work 以"表空且非运行"为条件（无 per-work 引用计数）；
+  - ksoftirqd 不做 CPU 亲和/NICE 值配置（UP、无 CFS 用户分级）。
+- 状态：已接受（m3-suite 11→16 例：kthread.run_exit /
+  workq.dedup_run / softirq.order_bh_mask（探测走 NET_TX/NET_RX，
+  不劫持 init 注册的 HI/TASKLET 槽）/ softirq.tasklet_sched /
+  softirq.ksoftirqd_pressure（自增殖风暴 → 预算耗尽 → ksoftirqd
+  RUNNABLE → 停风暴 → 排空归睡）；不新增 host 测试——softirq/
+  kthread 语义绑定中断与调度上下文，QEMU m3 电池承保覆盖；
+  m1r-fault/m2 串口因代码布局重钉，m1r-user 39/39 钉值字节不变）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

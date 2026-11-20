@@ -20,7 +20,7 @@
 | M0R | 工具锁、Multiboot1/ELF64、长模式、高半区、真实 QEMU smoke、CI workflow | 🟢 **done**（2026-11-16 判绿） | 净树 HEAD `4c22b7b` 全套 exit 0 + 三组 sha256 + CI 首跑 success：https://github.com/MoSunDay/minios/actions/runs/43886738739 |
 | M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟢 **done**（2026-11-19 判绿） | 净树 HEAD `ef2a335` 电池 9 步 EXIT0（smoke/m1r-suite/m1r-user 35+coverage/m1r-fault/demo-full，serial 钉值 `028048dd…`/`6137aefd…`/`0c39a3e5…`/`1ba8b13a…` 全复现）；CI run 44381221846 success；详见文末 M1R 判绿收口 |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | 🟡 **物理页基础已交付**（m2r-s1/s2，2026-11-19） | bootmem/buddy(双 zone)/directmap/SLUB/vmalloc+ioremap + m2 内核套件 9/9（`make test-qemu-m2`，exit 33）；host 26 例纯核单测；CI 接线；证据见文末 m2r 记录；匿名 VMA/brk/mmap/COW 待做 |
-| M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE | ⬜ pending | 等 M2 全绿 |
+| M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE | 🟡 **调度/时间/底半部已交付**（m3r-s1–s5，2026-11-20） | CFS+RT+waitqueue+时间层+kthread/workqueue/softirq 逐段电池全绿（m3-suite 16/16，`make test-qemu-m3`）；信号（s6）与 RCU/验收（s7）待做；证据见文末 m3r 记录 |
 | M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | ⬜ pending | 等 M3 全绿 |
 | M5 | 第二盘 ext4 RO 与 host/guest 黄金清单 | ⬜ pending | 等 M4 全绿；M5 起启用 host ext4 管线 |
 | M6 | 独立 `^has_journal` 副本 RW、htree/大文件/fsync | ⬜ pending | 等 M5 全绿 |
@@ -752,3 +752,66 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   `39f1576a…69006`**（8→11 例）；三者均二连跑字节稳定。
 - 决策：ADR-0019（三层时间结构 + 过期停泊语义 + 向量/线号教训；
   亚 tick 精度与 RTC wall-clock 延后 M8）。
+
+### m3r-s5（kthread/workqueue/softirq：底半部与内核线程基础，2026-11-20）
+
+- 交付：
+  - `proc/preempt.rs`：preempt_count 低 8 位抢占位 + 位 8-15
+    softirq/BH 深度（SOFTIRQ_OFFSET/MASK、local_bh_disable/enable、
+    in_softirq）——2.6 布局缩影，sched_raw 可审计。
+  - `proc/kthread.rs`（新）：KthreadFn=extern "C" fn(usize)->i32；
+    kthread_create（重播 allocproc 种子：**slot2=arg(r13)/slot3=fn
+    (r12)/slot6=trampoline——swtch 镜像槽序与压栈序相反**，首跑
+    fn/arg 反置经 0 间接调用 oops `rip=?0x1`，GDB 核验后修正）；
+    naked `_kthread_trampoline`（对齐 + call kthread_body + ud2 兜
+    底）；kthread_body（raw_release + sti + fn(arg) + exit(code)）；
+    kthread_run（PTABLE_LOCK + runnable_new）/kthread_reap（ZOMBIE
+    断言 + freeproc + xstate 回收）。tf=null（无用户态）、mm=None
+    （调度器免 CR3 切换，boot PML4 直跑）。
+  - `kernel/softirq.rs`（新）：2.6.11 索引 + 静态 vec/data/PENDING；
+    open/raise/pending；do_softirq（BH 深度守卫、
+    MAX_SOFTIRQ_RESTART=10、升索引快照分发、耗尽唤醒 ksoftirqd）；
+    traps_dispatch IRQ 出口钩 irq_exit()（IF 仍屏蔽——UP 简化）；
+    tasklet 双表（SCHED 去重、先清位再跑、禁用跳过）；ksoftirqd
+    kthread（排空 + wq_sleep 停泊 + interrupted 退出）+ 惰性
+    spawn_ksoftirqd；init() 注册 TASKLET/HI（探测用例走 NET_TX/
+    NET_RX，不劫持 init 槽位）。
+  - `kernel/workqueue.rs`（新）：events 静态队列（FIFO + pending
+    去重 + more/done 双等待队列 + 惰性 events worker）；flush_work
+    睡 done；schedule_work（M5 writeback 消费，暂 dead_code）。
+  - `kernel/time/mod.rs`：tick() 只 raise TIMER_SOFTIRQ，到期分发
+    （run_expired + wheel_tick）移入 timer_softirq；**单时基修复：
+    open_softirq 提前到 unmask/校准之前**——校准窗 tick 无人分发
+    会让 WHEEL.jiffies 永久滞后 TICKS（wheel_tick 空桶即断、每调用
+    恰推进 1 拍），wheel_cascade 以 TICKS 装填则永不触发（GDB 指纹：
+    timer_softirq 每拍进入 pc=0x100 而 WHEEL.jiffies 不动；注意
+    Rust 重排结构体——jiffies 在 WHEEL+0x1000 非 +0）。
+  - main.rs：m1r_boot 公共段 softirq::init()；M1rUser/Full 两臂
+    spawn_ksoftirqd（m3-suite 自带；smoke/m1r-suite/m2/fault 不
+    spawn——钉值稳定，无软中断压力）。sched.rs 增 sched_drive
+    （调用者栈上内联调度器，借用 CPU0.scheduler，镜像 pick/switch/
+    fpu/switchuvm 窗口；kthread/mm=None 免 CR3 切换）。
+  - m3-suite 11→**16** 例：`m3.kthread.run_exit`（run→ZOMBIE
+    xstate=42→reap→UNUSED）、`m3.workq.dedup_run`（二连 queue 去
+    重、drive 后 RAN==1、重排 RAN==2）、`m3.softirq.order_bh_mask`
+    （TX(2) 先于 RX(3)、BH 深度全程持有）、`m3.softirq.tasklet_sched`
+    （SCHED 去重/单跑/重排/普通+HI 双表）、`m3.softirq.
+    ksoftirqd_pressure`（NET_RX 自增殖风暴→预算耗尽余位+ksoftirqd
+    RUNNABLE→停风暴→drive 排空归 SLEEPING）；runner 同步 16 id。
+  - 不新增 host 测试：softirq/kthread 语义绑定中断与调度上下文
+    （bh 深度、swtch 镜像、调度借用），QEMU m3-suite 承保覆盖。
+- gate：make all（0 warning）/fmt/fmt-check/check-rust-only（files=
+  150）绿；host-tests **67** + runner 72 + tools 5；QEMU 电池
+  6 目标 PASS：m0r 6/6、m1r 20/20、m1r-user **39/39 串口钉值字节
+  不变（ksoftirqd 占 PTABLE 槽未扰动 forktest 计数）**+ coverage
+  active=39 not-active=1、m1r-fault 5/5、m2 16/16、m3-suite
+  **16/16**。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585`、m1r-user
+  serial `58452d31…48f0`/root `61cd7275…6138` 不变；**m1r-fault
+  重钉 `f3bf38d2…476e`**（backtrace 符号偏移随 s5 代码布局移位，
+  root.raw `0611a2b6…d4c3` 不变）、**m2-suite 重钉
+  `d81878e3…8ca8`**（zones 边界/vma.layout 动态地址随内核镜像
+  增大移位）、**m3-suite 重钉 `c423adf7…2a9a`**（11→16 例）；
+  三者均二连跑字节稳定。
+- 决策：ADR-0020（softirq/workqueue/kthread 结构与分歧 + swtch
+  槽序教训 + 单时基不变量「softirq 处理器先于首 tick 就位」）。

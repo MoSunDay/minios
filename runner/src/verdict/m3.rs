@@ -1,5 +1,5 @@
 //! M3 suite spec (plans/linux26/40 §2.1 suite protocol): the kernel-mode
-//! CFS/RT/waitqueue policy cases (pick order, tick fairness, RT level
+//! CFS/RT/waitqueue/time/kthread/workqueue/softirq policy cases (pick order, tick fairness, RT level
 //! order, FIFO head requeue, RR rotation, wiring invariants, wake
 //! discipline, unlink). Kernel-only round: no
 //! root disk, PASS exit 33 under the suite=m3 marker. Self-tests mirror
@@ -24,6 +24,11 @@ pub fn m3_suite_spec() -> SuiteSpec {
             "m3.time.clock_layer_wiring",
             "m3.time.hrtimer_order_cancel",
             "m3.time.wheel_cascade",
+            "m3.kthread.run_exit",
+            "m3.workq.dedup_run",
+            "m3.softirq.order_bh_mask",
+            "m3.softirq.tasklet_sched",
+            "m3.softirq.ksoftirqd_pressure",
         ],
     }
 }

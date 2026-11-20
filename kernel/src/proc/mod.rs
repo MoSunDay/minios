@@ -3,6 +3,7 @@
 pub mod cfs;
 pub mod exec;
 pub mod fpu;
+pub mod kthread;
 pub mod preempt;
 pub mod proc;
 pub mod rbtree;

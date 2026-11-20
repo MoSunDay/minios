@@ -77,6 +77,7 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
     arch::x86_64::cpu::init(core::ptr::addr_of!(_boot_stack_top) as usize);
     kernel::traps::init_idt();
     drivers::pic::init();
+    kernel::softirq::init();
     kernel::time::init_time();
     drivers::pic::unmask(0); // timer only
     proc::fpu::init_fpu();
@@ -112,6 +113,8 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
         BootMode::M1rUser => {
             ksymtab::set_active_suite("m1r-user");
             init_m1r_fs();
+            // Bottom-half pressure valve: resident before the driver.
+            kernel::softirq::spawn_ksoftirqd();
             kernel::suite::run_user();
         }
         BootMode::Full => {
@@ -126,6 +129,8 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
             if !proc::proc::userinit(image) {
                 m1r_fatal("userinit failed");
             }
+            // Bottom-half pressure valve: resident before user procs.
+            kernel::softirq::spawn_ksoftirqd();
             proc::sched::sched_entry();
         }
         BootMode::M0rSmoke => unreachable!(),
