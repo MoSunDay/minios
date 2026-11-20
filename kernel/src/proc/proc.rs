@@ -117,6 +117,8 @@ pub unsafe fn freeproc(p: *mut Proc) {
     }
     (*p).cwd = null_mut();
     (*p).pid = 0;
+    // Fresh CFS identity for the reused slot (nice 0, empty history).
+    (*p).se = super::cfs::SchedEntity::new();
     (*p).state = ProcState::UNUSED;
 }
 
@@ -262,9 +264,10 @@ pub fn fork() -> i32 {
     }
     let pid = unsafe { (*np).pid };
     let _guard = PTABLE_LOCK.lock();
-    // SAFETY: ptable lock held; the slot leaves EMBRYO for the scheduler.
+    // SAFETY: ptable lock held; the slot leaves EMBRYO for the scheduler
+    // and joins the CFS ready queue at min_vruntime.
     unsafe {
-        (*np).state = ProcState::RUNNABLE;
+        sched::runnable_new(np);
     }
     pid
 }
@@ -280,7 +283,8 @@ pub fn kill(pid: i32) -> i32 {
             if (*p).pid == pid {
                 (*p).killed = 1;
                 if (*p).state == ProcState::SLEEPING {
-                    (*p).state = ProcState::RUNNABLE;
+                    // SAFETY: ptable lock held; p sleeps in this context.
+                    sched::runnable_wake(p);
                 }
                 drop(_guard);
                 return 0;
@@ -339,7 +343,8 @@ pub fn userinit_named(image: &[u8], name: &[u8], argv: &[&[u8]]) -> bool {
                     crate::fs::xv6fs::layout::ROOTINO,
                 );
                 let _guard = PTABLE_LOCK.lock();
-                (*p).state = ProcState::RUNNABLE;
+                // SAFETY: ptable lock held; p is EMBRYO, exclusively ours.
+                sched::runnable_new(p);
                 set_initproc(p);
                 drop(_guard);
                 true

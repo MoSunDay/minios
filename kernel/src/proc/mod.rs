@@ -1,8 +1,11 @@
 //! proc: process table and per-process state (xv6 semantics, 64-bit).
 
+pub mod cfs;
 pub mod exec;
 pub mod fpu;
+pub mod preempt;
 pub mod proc;
+pub mod rbtree;
 pub mod sched;
 pub mod sleep;
 
@@ -43,6 +46,9 @@ pub struct FpuArea(pub [u8; 512]);
 pub struct Proc {
     pub state: ProcState,
     pub pid: i32,
+    /// CFS scheduling entity (21 §2); lifecycle owned by sched.rs under
+    /// PTABLE_LOCK.
+    pub se: cfs::SchedEntity,
     pub parent: *mut Proc,
     pub mm: Option<Mm>,
     pub tf: *mut Trapframe,
@@ -71,6 +77,7 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
     Proc {
         state: ProcState::UNUSED,
         pid: 0,
+        se: cfs::SchedEntity::new(),
         parent: core::ptr::null_mut(),
         mm: None,
         tf: core::ptr::null_mut(),

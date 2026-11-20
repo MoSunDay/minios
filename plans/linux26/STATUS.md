@@ -594,3 +594,42 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   全 PASS；同净树 commit `67bc6ca` 推 CI run 44556592736（core-ci）结论
   success → 本地 + CI 双绿 → **M2 🟢**。下一步 M3（proc/sched 深化，
   21 §M3 gate）。
+
+### m3r-s1（CFS 核心：sched_entity/红黑树/vruntime/nice 权重/yield，2026-11-20）
+
+- 交付：
+  - `proc/rbtree.rs`（新 381 行）——侵入式红黑树（CLRS 插入/删除修复 +
+    Linux 式 leftmost 缓存，等键 FIFO）；结构审计（父链/黑高/红红/序/计数）
+    放宿主侧 `rbtreetests.rs`（`#[cfg(test)]` 访问器，内核零审计代码）。
+  - `proc/cfs.rs`（新 206 行）——纯策略：Linux 40 档 nice 权重表、
+    `update_curr`（sum_exec 墙钟 + vruntime×1024/weight）、`min_vruntime`
+    单调地板、`place_new/place_wake`（clamp 到地板）、集中 `granularity =
+    max(SCHED_LATENCY/(queued+1), MIN_GRAN)`、`preempt_needed`、
+    `yield_entity`。
+  - `proc/preempt.rs`（新 44 行）——UP preempt_count + `sched_raw` 前审计
+    断言（消费者 s5/s7；见 ADR-0016）。
+  - `sched.rs` 重写（174→293 行）——scheduler 扫描改 `pick_next_entity`
+    （leftmost 出树 + `exec_start=now`），就绪队列共用 PTABLE_LOCK（无新
+    锁序）；`sched_raw` 统一记账出队切片（yield/sleep/exit 全路径）+
+    preempt 审计；`entity_tick` 仅用户态定时抢占；`runnable_new/wake`
+    覆盖全部 6 个 RUNNABLE 迁移点（fork:267/kill:283/userinit:342/yield/
+    wakeup1:63/pick）；`freeproc` 重置实体；swtch/forkret/锁所有权协议
+    零改动。
+  - `SYS_SCHED_YIELD(24)`（abi + dispatch）；`time::tick` 用户抢占改走
+    `entity_tick`。
+  - 宿主门（21 §7 确定性模型）：`m3tests.rs`（新 193 行）——Sim 镜像
+    sched.rs 胶水（固定 10ms 节拍/单 CPU/无迁移）：同权重 4 实体 4000
+    tick 散布 <5%、nice 0:5 → 1024:335（±5%）、两实体交替 ≤2 tick、
+    阈值/权重/唤醒 clamp/yield 单测。
+- 修 bug（宿主模型先行拦截）：`exec_start==0` 哨兵与开机 `TICKS==0` 冲突
+  （首个被 pick 的进程永不记账 → 永不抢占 → 饿死全员）；`granularity`
+  分母漏算当前实体（对齐 Linux nr_running 语义）。
+- gate：make all/fmt-check/check-rust-only 绿；host-tests 38→**48** +
+  runner 67 + tools 5；QEMU 全电池 PASS：m0r 6/6、m1r 20/20、m1r-user
+  **39/39**（preempt 金丝雀绿）+ coverage active=39 not-active=1、
+  m1r-fault 5/5、m2 16/16。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585`、m1r-user
+  `58452d31…48f0` 不变；**m1r-fault 重钉 `e9c0ae56…5374`**（rbtree/cfs/
+  preempt 入链符号位移；root `0611a2b6…d4c3` 不变）；**m2-suite 重钉
+  `c3636c75…0b62`**（16 例）。
+- 决策：ADR-0016（抢占显式关闭 + tick 记账 + clamp 简化 + 宿主模型门）。

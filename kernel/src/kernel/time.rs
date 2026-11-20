@@ -43,6 +43,6 @@ pub fn tick(tf: &mut Trapframe) {
     unsafe { TICK_LOCK.raw_release() };
     crate::proc::sleep::wakeup_ticks(now);
     if tf.from_user() {
-        crate::proc::sched::yield_cpu();
+        crate::proc::sched::entity_tick();
     }
 }

@@ -25,6 +25,7 @@ pub const SYS_CHDIR: u64 = 80;
 pub const SYS_LINK: u64 = 86;
 pub const SYS_UNLINK: u64 = 87;
 pub const SYS_NANOSLEEP: u64 = 35;
+pub const SYS_SCHED_YIELD: u64 = 24;
 pub const SYS_MKNOD: u64 = 133;
 pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;

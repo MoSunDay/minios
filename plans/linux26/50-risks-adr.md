@@ -102,6 +102,31 @@
   守恒+计数断言；xv6.mem.oom 用户风暴：最大足迹子进程恰被终止 0xff、驱动
   存活且事后恢复内存服务；coverage M2 required，ADR-0015 即本条）。
 
+### ADR-0016 M3 CFS（UP）：抢占显式关闭 + 简化策略（tick 记账）
+- 背景：21 §2——M3 交付 UP CFS（sched_entity/vruntime/红黑树/nice 权重/
+  集中 granularity），内核抢占保持关闭并显式审计（preempt_count），不做
+  full-PREEMPT 声明；公平性 <5% 仅作宿主确定性模型门（固定输入/节拍/
+  无迁移），QEMU 公平性走 guest-time + 预声明容差。
+- 决策：`proc/rbtree.rs`（侵入式红黑树，缓存 leftmost，等键 FIFO）+
+  `proc/cfs.rs`（纯策略：Linux nice −20..+19 权重表、`update_curr` 加权
+  vruntime、`min_vruntime` 单调、集中 `granularity = max(latency/(queued+1),
+  min_gran)`，粒度分母含当前实体——对齐 Linux `nr_running` 语义）+
+  `proc/preempt.rs`（UP preempt_count，`sched_raw` 前断言可抢占；消费者
+  s5/s7 落地）；`sched.rs` 换挑选（ptable/swtch/forkret 所有权协议零改动，
+  就绪队列共用 PTABLE_LOCK，无新锁序）；`entity_tick` 仅用户态定时陷阱
+  抢占；`SYS_SCHED_YIELD(24)`。
+- 简化（相对 Linux，均为有意决策）：记账粒度 = 100 Hz PIT tick（TSC 精化
+  s4）；新实体/唤醒实体 clamp 到 `min_vruntime`（无 sleeper bonus、无 fork
+  惩罚）；抢占条件 `curr.vruntime − front > granularity`；`exec_start`
+  无零哨兵（开机首 pick 合法为 0——首版哨兵与 TICKS==0 冲突致首个进程
+  永不记账，宿主模型先行拦截）。宿主门：同权重 4 实体 4000 tick 散布
+  <5%、nice 0:5 比值 ≈ 1024:335（±5%）、两实体交替 ≤2 tick。
+- 约束：RUNNABLE ⟺ 在队这一不变量覆盖全部 6 个迁移点（fork/kill/
+  userinit/yield/wakeup1/pick）；`m1r-user xv6.ipc.preempt` 为金丝雀；
+  RT/迁移/组调度不在本 ADR（s2 起）。
+- 状态：已接受（host-tests m3tests/rbtreetests 10 例；QEMU 电池 5/5 含
+  m1r-user 39/39；本条即 ADR-0016）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

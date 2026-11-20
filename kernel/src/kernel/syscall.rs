@@ -18,7 +18,7 @@ use abi::{
     MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP, SYS_EXECVE,
     SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK, SYS_FSTAT, SYS_GETPID, SYS_KILL, SYS_LINK, SYS_MKDIR,
     SYS_MKNOD, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_PIPE, SYS_READ,
-    SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
+    SYS_SCHED_YIELD, SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
 };
 
 /// C entry from the syscall stub (tf.rax = number, arg registers follow
@@ -39,6 +39,10 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         SYS_LINK => syspath::sys_link(a.arg_usize(0), a.arg_usize(1)),
         SYS_UNLINK => syspath::sys_unlink(a.arg_usize(0)),
         SYS_NANOSLEEP => sys_nanosleep(a.arg_usize(0)),
+        SYS_SCHED_YIELD => {
+            crate::proc::sched::sched_yield();
+            0
+        }
         SYS_BRK => sys_brk(a.arg64(0)),
         SYS_MMAP => sys_mmap(
             a.arg_usize(0),

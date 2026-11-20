@@ -11,12 +11,16 @@ pub mod bitmap;
 pub mod bootmem;
 #[path = "../../kernel/src/mm/buddy.rs"]
 pub mod buddy;
+#[path = "../../kernel/src/proc/cfs.rs"]
+pub mod cfs;
 #[path = "../../kernel/src/lib/elf.rs"]
 pub mod elf;
 #[path = "../../kernel/src/kernel/fixup_table.rs"]
 pub mod fixup_table;
 #[path = "../../kernel/src/kernel/ksyms.rs"]
 pub mod ksyms;
+#[path = "../../kernel/src/proc/rbtree.rs"]
+pub mod rbtree;
 #[path = "../../kernel/src/mm/slub.rs"]
 pub mod slub;
 #[path = "../../kernel/src/lib/string.rs"]
@@ -30,6 +34,10 @@ pub mod vma;
 
 #[cfg(test)]
 mod m2tests;
+#[cfg(test)]
+mod m3tests;
+#[cfg(test)]
+mod rbtreetests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

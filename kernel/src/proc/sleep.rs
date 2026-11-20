@@ -60,7 +60,8 @@ pub unsafe fn wakeup1(chan: usize) {
     for i in 0..NPROC {
         let p = &mut table[i] as *mut super::Proc;
         if (*p).state == ProcState::SLEEPING && (*p).chan == chan {
-            (*p).state = ProcState::RUNNABLE;
+            // SAFETY: ptable lock held; p sleeps on this channel.
+            super::sched::runnable_wake(p);
         }
     }
 }
