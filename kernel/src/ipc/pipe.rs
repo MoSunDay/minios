@@ -1,20 +1,20 @@
-//! pipe.rs: xv6 pipe.c port — anonymous pipes with sleep/wakeup flow
-//! control and a 512-byte ring buffer. Sleep channels are the addresses of
-//! p->nread / p->nwrite, exactly like xv6.
-
-use core::ptr::addr_of;
+//! pipe.rs: xv6 pipe.c port — anonymous pipes with wait-queue flow
+//! control (21 §3) and a 512-byte ring buffer: writers block EXCLUSIVE
+//! (a reader freeing space wakes one — herd avoidance), readers block
+//! non-exclusive (a writer landing data wakes all); both waits are
+//! interruptible (killed mid-wait: ERESTARTSYS rewind, xv6-visible -1).
 
 use crate::fs::file_table::{filealloc, fileclose, File, FileState};
 use crate::klib::sync::Spinlock;
 use crate::mm::frame::{kalloc, kfree};
 use crate::proc::proc::myproc;
-use crate::proc::sleep::{sleep, wakeup};
+use crate::proc::sleep::{interrupted, wake_up, wq_sleep};
 
 pub const PIPESIZE: usize = 512;
 
 /// pipe.c `struct pipe` (allocated with kalloc; one page is plenty; the
-/// embedded `Spinlock<()>` composes with sleep(chan, &p->lock) exactly
-/// like xv6's sleep(&p->nread, &p->lock)).
+/// embedded `Spinlock<()>` orders before PTABLE_LOCK exactly like the
+/// chan protocol — wq_sleep releases it across the sleep).
 pub struct Pipe {
     pub lock: Spinlock<()>,
     pub data: [u8; PIPESIZE],
@@ -22,6 +22,8 @@ pub struct Pipe {
     pub nwrite: u32,    // number of bytes written
     pub readopen: i32,  // read fd is still open
     pub writeopen: i32, // write fd is still open
+    /// Data/space waiters (21 §3; replaces the nread/nwrite chans).
+    pub waitq: crate::proc::waitqueue::WaitQueue,
 }
 
 /// pipealloc: create a pipe, returning the read end in *f0 and the write
@@ -70,6 +72,7 @@ pub unsafe fn pipealloc(f0: &mut *mut File, f1: &mut *mut File) -> i32 {
                 nwrite: 0,
                 readopen: 1,
                 writeopen: 1,
+                waitq: crate::proc::waitqueue::WaitQueue::new(),
             },
         );
     }
@@ -106,15 +109,27 @@ pub unsafe fn pipewrite(p: *mut Pipe, src: *const u8, n: i32) -> i32 {
                 return -1;
             }
             while (*p).nwrite == (*p).nread + PIPESIZE as u32 {
-                // doc: pipewrite going to sleep
-                wakeup(addr_of!((*p).nread) as usize);
-                sleep(addr_of!((*p).nwrite) as usize, &(*p).lock);
+                if (*p).readopen == 0 {
+                    // All readers gone: EPIPE (plus SIGPIPE at s6).
+                    (*p).lock.raw_release();
+                    return -(abi::EPIPE_ABS) as i32;
+                }
+                // doc: pipewrite going to sleep (exclusive: a reader
+                // freeing space wakes ONE writer)
+                // SAFETY: pipe lock held; wait_link unqueued.
+                wake_up(&mut (*p).waitq, false);
+                wq_sleep(core::ptr::addr_of_mut!((*p).waitq), &(*p).lock, true, true);
+                if interrupted() {
+                    (*p).lock.raw_release();
+                    return -(abi::ERESTARTSYS_ABS) as i32;
+                }
             }
             (*p).data[((*p).nwrite % PIPESIZE as u32) as usize] = *src.add(i as usize);
             (*p).nwrite += 1;
             i += 1;
-            wakeup(addr_of!((*p).nread) as usize);
         }
+        // Data landed: wake all readers (non-exclusive waiters).
+        wake_up(&mut (*p).waitq, false);
         (*p).lock.raw_release();
     }
     n
@@ -136,9 +151,15 @@ pub unsafe fn piperead(p: *mut Pipe, dst: *mut u8, n: i32) -> i32 {
                 (*p).lock.raw_release();
                 return 0; // EOF: write end closed
             }
-            // doc: piperead going to sleep
-            wakeup(addr_of!((*p).nwrite) as usize);
-            sleep(addr_of!((*p).nread) as usize, &(*p).lock);
+            // doc: piperead going to sleep (non-exclusive: a writer
+            // landing data wakes all readers)
+            // SAFETY: pipe lock held; wait_link unqueued.
+            wake_up(&mut (*p).waitq, true);
+            wq_sleep(core::ptr::addr_of_mut!((*p).waitq), &(*p).lock, true, false);
+            if interrupted() {
+                (*p).lock.raw_release();
+                return -(abi::ERESTARTSYS_ABS) as i32;
+            }
         }
         let mut i: i32 = 0;
         while i < n && (*p).nread != (*p).nwrite {
@@ -146,7 +167,8 @@ pub unsafe fn piperead(p: *mut Pipe, dst: *mut u8, n: i32) -> i32 {
             (*p).nread += 1;
             i += 1;
         }
-        wakeup(addr_of!((*p).nwrite) as usize);
+        // Space freed: wake ONE blocked writer (exclusive waiter).
+        wake_up(&mut (*p).waitq, true);
         (*p).lock.raw_release();
         i
     }
@@ -172,8 +194,8 @@ pub unsafe fn pipeclose(p: *mut Pipe, writable: i32) {
             kfree(page);
             return;
         }
-        wakeup(addr_of!((*p).nread) as usize);
-        wakeup(addr_of!((*p).nwrite) as usize);
+        // EOF (readers) / EPIPE (writers): wake everything.
+        wake_up(&mut (*p).waitq, false);
         (*p).lock.raw_release();
     }
 }

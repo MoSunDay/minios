@@ -7,7 +7,7 @@
 
 use crate::arch::x86_64::io;
 use crate::console;
-use crate::proc::{cfs, rt, SchedPolicy};
+use crate::proc::{cfs, rt, waitqueue, SchedPolicy};
 
 /// Link-bearing stand-in for a Proc (both policies are link-agnostic).
 struct FakeEnt {
@@ -178,6 +178,97 @@ fn case_rt_rr_rotate() -> bool {
     }
 }
 
+/// Link-bearing stand-in for a waiter (recovered via `offset_of!`,
+/// not blind offset-0 casts — see the s2 battery note above).
+struct FakeWqEnt {
+    link: waitqueue::WaitLink,
+    id: u32,
+}
+
+impl FakeWqEnt {
+    const fn new(id: u32) -> FakeWqEnt {
+        FakeWqEnt {
+            link: waitqueue::WaitLink::new(),
+            id,
+        }
+    }
+}
+
+fn ent_of_wqlink(l: *mut waitqueue::WaitLink) -> *mut FakeWqEnt {
+    ((l as usize) - core::mem::offset_of!(FakeWqEnt, link)) as *mut FakeWqEnt
+}
+
+/// m3.wq.wake_policy: Linux wake discipline — non-exclusive entries
+/// queue at the head, exclusive at the tail; wake-one takes every
+/// non-exclusive waiter plus the first exclusive one; wake-all drains.
+fn case_wq_wake_policy() -> bool {
+    let mut a = FakeWqEnt::new(0);
+    let mut b = FakeWqEnt::new(1);
+    let mut c = FakeWqEnt::new(2);
+    let mut d = FakeWqEnt::new(3);
+    let mut q = waitqueue::WaitQueue::new();
+    // SAFETY: owned links, not queued anywhere.
+    unsafe {
+        waitqueue::enqueue_link(&mut a.link, &mut q, true, false); // [a]
+        waitqueue::enqueue_link(&mut b.link, &mut q, true, false); // [b a]
+        waitqueue::enqueue_link(&mut c.link, &mut q, true, true); // [b a c]
+        waitqueue::enqueue_link(&mut d.link, &mut q, true, true); // [b a c d]
+    }
+    let mut set = [core::ptr::null_mut(); waitqueue::MAX_WAITERS];
+    let n = waitqueue::select_wake(&q, true, &mut set);
+    let mut ok = n == 3; // b a (non-exclusive) + c (first exclusive); d stays
+    let want = [1u32, 0, 2];
+    for (i, l) in set.iter().take(n).enumerate() {
+        // SAFETY: links from our own ents.
+        unsafe {
+            ok = ok && (*ent_of_wqlink(*l)).id == want[i];
+        }
+    }
+    let n_all = waitqueue::select_wake(&q, false, &mut set);
+    ok = ok && n_all == 4;
+    // SAFETY: owned links.
+    unsafe {
+        waitqueue::unlink(&mut a.link);
+        waitqueue::unlink(&mut b.link);
+        waitqueue::unlink(&mut c.link);
+        waitqueue::unlink(&mut d.link);
+    }
+    ok && q.is_empty()
+}
+
+/// m3.wq.unlink_middle: unlinking a middle waiter keeps the list walk
+/// exact, and a second unlink of the same link is a no-op.
+fn case_wq_unlink_middle() -> bool {
+    let mut a = FakeWqEnt::new(0);
+    let mut b = FakeWqEnt::new(1);
+    let mut c = FakeWqEnt::new(2);
+    let mut q = waitqueue::WaitQueue::new();
+    // SAFETY: owned links.
+    unsafe {
+        waitqueue::enqueue_link(&mut a.link, &mut q, true, false); // [a]
+        waitqueue::enqueue_link(&mut b.link, &mut q, true, false); // [b a]
+        waitqueue::enqueue_link(&mut c.link, &mut q, true, false); // [c b a]
+        waitqueue::unlink(&mut b.link); // [c a]
+        waitqueue::unlink(&mut b.link); // idempotent
+    }
+    let mut set = [core::ptr::null_mut(); waitqueue::MAX_WAITERS];
+    let n = waitqueue::select_wake(&q, false, &mut set);
+    let mut ok = n == 2;
+    let want = [2u32, 0];
+    for (i, l) in set.iter().take(n).enumerate() {
+        // SAFETY: links from our own ents.
+        unsafe {
+            ok = ok && (*ent_of_wqlink(*l)).id == want[i];
+        }
+    }
+    // SAFETY: owned links.
+    unsafe {
+        waitqueue::unlink(&mut a.link);
+        waitqueue::unlink(&mut c.link);
+    }
+    ok && q.is_empty()
+}
+
 /// m3.sched.policy_wiring: Linux-visible numbering and bounds the
 /// syscalls and pick order rely on.
 fn case_sched_policy_wiring() -> bool {
@@ -201,13 +292,15 @@ fn case_sched_policy_wiring() -> bool {
 
 pub fn run() -> ! {
     ksymtab_placeholder();
-    let checks: [(&str, fn() -> bool); 6] = [
+    let checks: [(&str, fn() -> bool); 8] = [
         ("m3.cfs.pick_order", case_cfs_pick_order),
         ("m3.cfs.tick_fairness", case_cfs_tick_fairness),
         ("m3.rt.prio_order", case_rt_prio_order),
         ("m3.rt.fifo_head", case_rt_fifo_head),
         ("m3.rt.rr_rotate", case_rt_rr_rotate),
         ("m3.sched.policy_wiring", case_sched_policy_wiring),
+        ("m3.wq.wake_policy", case_wq_wake_policy),
+        ("m3.wq.unlink_middle", case_wq_unlink_middle),
     ];
     let mut total = 0usize;
     let mut passed = 0usize;

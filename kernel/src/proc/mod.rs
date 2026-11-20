@@ -9,6 +9,7 @@ pub mod rbtree;
 pub mod rt;
 pub mod sched;
 pub mod sleep;
+pub mod waitqueue;
 
 use crate::kernel::traps::Trapframe;
 use crate::klib::sync::Spinlock;
@@ -80,6 +81,8 @@ pub struct Proc {
     /// Intrusive RT list link + remaining RR quantum in ticks.
     pub rt_link: rt::RtLink,
     pub rt_ticks_left: i32,
+    /// Wait-queue link (21 §3): a UP proc sleeps on at most one queue.
+    pub wait_link: waitqueue::WaitLink,
     pub parent: *mut Proc,
     pub mm: Option<Mm>,
     pub tf: *mut Trapframe,
@@ -113,6 +116,7 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
         rt_prio: 0,
         rt_link: rt::RtLink::new(),
         rt_ticks_left: 0,
+        wait_link: waitqueue::WaitLink::new(),
         parent: core::ptr::null_mut(),
         mm: None,
         tf: core::ptr::null_mut(),
@@ -129,10 +133,8 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
 
 pub static PTABLE_LOCK: Spinlock<()> = Spinlock::new("ptable", ());
 
-/// PTABLE base address, also the wait() sleep channel (xv6 uses &ptable).
-pub fn ptable_chan() -> usize {
-    core::ptr::addr_of!(PTABLE) as usize
-}
+/// The wait4/child-reap wait queue: exit() wakes it (all waiters).
+pub static mut PTABLE_WAITQ: waitqueue::WaitQueue = waitqueue::WaitQueue::new();
 
 /// # Safety
 /// Single-CPU kernel; callers must respect the ptable lock discipline.

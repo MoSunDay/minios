@@ -154,6 +154,33 @@
 - 状态：已接受（host rttests 4 例 + rbtreetests/m3tests；QEMU 电池
   6 目标全 PASS 含 m3-suite 6/6、m1r-user 39/39 金丝雀）。
 
+### ADR-0018 M3 waitqueue（UP）：纯链表层 + Linux 唤醒纪律 + ERESTARTSYS 回卷
+- 背景：21 §3——waitqueue 承接可中断/不可中断与 exclusive 唤醒；chan
+  sleep/wakeup 保留为底层原语（console/ide/bcache/ilock/log 等 xv6 期
+  睡眠者仍在 chan 上，后续阶段机会迁移）。
+- 决策：`proc/waitqueue.rs` = 纯链表策略（如 rt/cfs 可宿主单测）：
+  WaitLink（next/prev/queue 回指/interruptible/exclusive）+ WaitQueue
+  （头尾）+ `enqueue_link`（Linux 纪律：非 exclusive 头插、exclusive
+  尾插）+ `unlink`（幂等）+ `select_wake`（one = 全部非 exclusive +
+  首个 exclusive；all = 全体）；内核胶水（`wq_sleep`/`wake_up`/
+  `wake_up_locked`/`interrupted`）在 sleep.rs——锁协议与 chan sleep
+  完全一致（资源锁序在前，PTABLE_LOCK 过 swtch 转移所有权）。
+- 迁移：pipe 单一 WaitQueue——读者非 exclusive（写者落数据 wake-all）、
+  写者 exclusive（读者腾空间 wake-one，防惊群）；wait4 睡 PTABLE_WAITQ
+  （可中断），exit() 唤醒全部；kill() 零改动（唤醒任意睡眠者），睡眠者
+  醒后幂等自摘链——可中断等待以 ERESTARTSYS 破局。顺带落地 pipewrite
+  的 EPIPE（读者全关时写 → -EPIPE；SIGPIPE 信号与用户用例在 s6）。
+- ERESTARTSYS：`syscall_dispatch` 见 -512 时 rip -= 2（`syscall` 指令
+  2 字节）回卷待重启；s6 前唯一中断源是致命 kill——重入调用因 killed
+  返回 -1（xv6 可见契约），进程在下个用户 trap 退出；修复了 xv6 的
+  已知 wart（被 kill 的管道睡眠者永远不醒/再睡死循环）。
+- 简化（有意）：无 wait_queue_t 回调（default_wake_function 等价 =
+  直接 runnable_wake）；无 prepare_to_wait/finish_wait 族拆分（单
+  wq_sleep 内联等价）；UP 单 WaitLink（一进程同时至多睡一队）。
+- 状态：已接受（host waitqtests 6 例；m3-suite 扩至 8 例含唤醒纪律/
+  中摘幂等；m1r-user 39/39 **串口钉值跨迁移字节不变**——pipe/wait/kill
+  全契约保持的直接证据）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

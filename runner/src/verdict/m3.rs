@@ -1,6 +1,7 @@
 //! M3 suite spec (plans/linux26/40 §2.1 suite protocol): the kernel-mode
-//! CFS/RT policy cases (pick order, tick fairness, RT level order, FIFO
-//! head requeue, RR rotation, wiring invariants). Kernel-only round: no
+//! CFS/RT/waitqueue policy cases (pick order, tick fairness, RT level
+//! order, FIFO head requeue, RR rotation, wiring invariants, wake
+//! discipline, unlink). Kernel-only round: no
 //! root disk, PASS exit 33 under the suite=m3 marker. Self-tests mirror
 //! the M2 ones: one legal complete log is green, every failure mode is
 //! red.
@@ -18,6 +19,8 @@ pub fn m3_suite_spec() -> SuiteSpec {
             "m3.rt.fifo_head",
             "m3.rt.rr_rotate",
             "m3.sched.policy_wiring",
+            "m3.wq.wake_policy",
+            "m3.wq.unlink_middle",
         ],
     }
 }
@@ -32,9 +35,10 @@ mod tests {
         for c in m3_suite_spec().expected_cases {
             log.push_str(&format!("CASE {c} PASS\n"));
         }
-        log.push_str(
-            "MINIOS_X86_64_TEST_PASS_V1 suite=m3 run=core-up total=6 passed=6 failed=0 skipped=0\n",
-        );
+        let n = m3_suite_spec().expected_cases.len();
+        log.push_str(&format!(
+            "MINIOS_X86_64_TEST_PASS_V1 suite=m3 run=core-up total={n} passed={n} failed=0 skipped=0\n"
+        ));
         log
     }
 
@@ -73,7 +77,8 @@ mod tests {
         assert!(judge(&m3_suite_spec(), &outcome(&good_m3_log(), Some(35), false)).is_err());
         assert!(judge(&m3_suite_spec(), &outcome(&good_m3_log(), None, true)).is_err());
         // Extra marker field mismatch (total) is red too.
-        let log = good_m3_log().replace("total=6 passed=6", "total=6 passed=5");
+        let n = m3_suite_spec().expected_cases.len();
+        let log = good_m3_log().replace(&format!("passed={n}"), &format!("passed={}", n - 1));
         assert!(judge(
             &m3_suite_spec(),
             &outcome(&log, Some(EXPECTED_EXIT_CODE), false)

@@ -33,6 +33,8 @@ pub mod sysarg;
 pub mod tf_layout;
 #[path = "../../kernel/src/mm/vma.rs"]
 pub mod vma;
+#[path = "../../kernel/src/proc/waitqueue.rs"]
+pub mod waitqueue;
 
 #[cfg(test)]
 mod m2tests;
@@ -46,3 +48,5 @@ mod rttests;
 mod tests;
 #[cfg(test)]
 mod vmatests;
+#[cfg(test)]
+mod waitqtests;

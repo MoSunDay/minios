@@ -124,6 +124,9 @@ pub unsafe fn freeproc(p: *mut Proc) {
     (*p).rt_prio = 0;
     (*p).rt_link = super::rt::RtLink::new();
     (*p).rt_ticks_left = 0;
+    // The wait link must be unqueued: exit paths dequeue, but a killed
+    // slot's link is guaranteed fresh regardless.
+    (*p).wait_link = super::waitqueue::WaitLink::new();
     (*p).state = ProcState::UNUSED;
 }
 
@@ -160,8 +163,10 @@ pub fn exit(status: i32) -> ! {
                 }
             }
         }
-        // Wake the parent (if any) — xv6 wakeup1 with the ptable held.
-        super::sleep::wakeup1(super::ptable_chan());
+        // Wake reaping parents (all waiters; ptable held).
+        // SAFETY: ptable lock held; static access without a reference.
+        let wq = core::ptr::addr_of_mut!(super::PTABLE_WAITQ);
+        super::sleep::wake_up_locked(&mut *wq, false);
         (*p).state = ProcState::ZOMBIE;
         (*p).xstate = status;
         // Suite mode: pid 1 is the user driver; its exit is the verdict.
@@ -211,8 +216,17 @@ pub fn wait_status(want_pid: i32) -> (i32, i32) {
                 drop(_guard);
                 return (-1, 0);
             }
-            // Sleep on the ptable channel; the scheduler takes the lock.
-            super::sleep::sleep(super::ptable_chan(), &PTABLE_LOCK);
+            // Sleep on the reap wait queue (interruptible: ERESTARTSYS
+            // rewinds wait4, whose entry path sees killed and answers
+            // -1 — the xv6-visible contract); the scheduler takes the
+            // lock.
+            // SAFETY: ptable lock held (ours); wait_link unqueued.
+            super::sleep::wq_sleep(
+                core::ptr::addr_of_mut!(super::PTABLE_WAITQ),
+                &PTABLE_LOCK,
+                true,
+                false,
+            );
         }
     }
 }

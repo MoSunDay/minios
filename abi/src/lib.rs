@@ -73,6 +73,15 @@ pub const EINVAL: i64 = -22;
 pub const EMFILE: i64 = -24;
 pub const ENOSPC: i64 = -28;
 pub const EPIPE: i64 = -32;
+/// Positive magnitude for kernel-internal i32 sites (pipe write):
+/// `-(EPIPE_ABS as i32)`.
+pub const EPIPE_ABS: i64 = 32;
+/// Restartable-interrupt sentinel (21 §3): syscall_dispatch rewinds rip
+/// past the `syscall` insn so the call re-executes after the interrupt
+/// is handled. Pre-s6 the only source is fatal kill — the re-entered
+/// call sees killed and answers -1 (xv6-visible contract).
+pub const ERESTARTSYS: i64 = -512;
+pub const ERESTARTSYS_ABS: i64 = 512;
 pub const ERANGE: i64 = -34;
 pub const ENAMETOOLONG: i64 = -36;
 pub const ENOSYS: i64 = -38;

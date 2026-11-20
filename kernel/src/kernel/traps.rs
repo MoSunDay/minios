@@ -254,5 +254,15 @@ pub extern "C" fn syscall_dispatch(tf: &mut Trapframe) {
         oops::kernel_fault(tf, "syscall entry with wrong kernel GS base");
     }
     let ret = super::syscall::dispatch(tf);
+    if ret == abi::ERESTARTSYS {
+        // Restartable interruption (21 §3): rewind to the `syscall`
+        // insn (2 bytes) so the call re-executes once the interrupt is
+        // handled. Pre-s6 the only source is fatal kill — the
+        // re-entered call returns -1 and the proc exits at its next
+        // user trap (xv6-visible contract).
+        tf.rip -= 2;
+        tf.rax = abi::ERESTARTSYS as u64;
+        return;
+    }
     tf.rax = ret as u64;
 }

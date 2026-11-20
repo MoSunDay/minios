@@ -672,3 +672,38 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   `0611a2b6…d4c3` 不变）；**m2-suite 重钉 `0baa40fb…3c32`**（16 例）；
   **m3-suite 首钉 `ba629b98…4112`**（6 例）。
 - 决策：ADR-0017（见上）。
+
+### m3r-s3（waitqueue：可中断/exclusive + ERESTARTSYS + pipe/wait4 迁移，2026-11-20）
+
+- 交付：
+  - `proc/waitqueue.rs`（新 158 行，纯策略可宿主单测）——WaitLink
+    （幂等 unlink）+ WaitQueue + `enqueue_link`（非 exclusive 头插/
+    exclusive 尾插，Linux `__add_wait_queue{,_tail}`）+ `select_wake`
+    （one = 全部非 exclusive + 首个 exclusive；all = 全体）。
+  - `sleep.rs`（72→152 行）——内核胶水 `wq_sleep`（xv6 sleep 锁协议：
+    资源锁跨睡眠释放/复取，PTABLE_LOCK 过 swtch 转移）+
+    `wake_up(_locked)`（offset_of 定位 Proc）+ `interrupted`。
+  - pipe 迁移：单一 `waitq`（读者非 exclusive/写者 exclusive——读者
+    腾空间 wake-one 防惊群，写者落数据 wake-all）；**顺带落地
+    pipewrite EPIPE**（读者全关 → -EPIPE；SIGPIPE s6）。
+  - wait4 迁移：睡 `PTABLE_WAITQ`（可中断），exit() wake-all；
+    kill() 零改动 + 睡眠者幂等自摘链 → 可中断等待以 ERESTARTSYS 破局
+    （修复 xv6 已知 wart：被 kill 的管道睡眠者死睡）。
+  - `syscall_dispatch` ERESTARTSYS(-512) 回卷 rip-=2（`syscall` 指令
+    2 字节）；abi 增 `ERESTARTSYS/ERESTARTSYS_ABS/EPIPE_ABS`。
+  - m3-suite 扩 2 例（`m3.wq.wake_policy`/`m3.wq.unlink_middle`，
+    FakeWqEnt 用 offset_of 回收——s2 布局教训直接复用），6→8；runner
+    spec/自测同步（fixture 计数改动态派生）。
+  - 宿主 `waitqtests.rs` 6 例（one/all 纪律、中摘/头尾摘幂等、链接
+    标志、chan 相异性）。
+- gate：make all/fmt/fmt-check/check-rust-only（files=141）绿；
+  host-tests 52→**58** + runner 72 + tools 5；QEMU 电池 6 目标 PASS：
+  m0r 6/6、m1r 20/20、m1r-user **39/39（串口钉值跨迁移字节不变——
+  pipe/wait/kill 全语义保持）**+ coverage active=39 not-active=1、
+  m1r-fault 5/5、m2 16/16、m3-suite **8/8**。
+- 钉值：m0r `028048dd…20f1`、m1r-suite `6137aefd…e585`、m1r-user
+  serial `58452d31…48f0`/root `61cd7275…6138`、m1r-fault
+  `e0b37b6e…48ea`/root `0611a2b6…d4c3` 全部不变；**m2-suite 重钉
+  `537075a3…4c26`**；**m3-suite 重钉 `c4dd5ecc…1a40`**（8 例）。
+- 决策：ADR-0018（纯链表层 + Linux 唤醒纪律 + ERESTARTSYS 回卷；
+  chan 原语保留，console/ide/bcache/ilock/log 后续机会迁移）。
