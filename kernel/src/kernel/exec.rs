@@ -11,7 +11,6 @@ use core::ptr::null_mut;
 use crate::arch::x86::mm::layout::p2v;
 use crate::arch::x86::mm::pgtable as vm;
 use crate::fs::xv6fs::inode::{ilock, iunlockput, readi};
-use crate::fs::xv6fs::namei::namei;
 use crate::kernel::sched::{myproc, MAXARG, PTE_ADDR};
 use crate::lib::elf::{parse_ehdr, parse_phdr, valid_magic, EHDR_SIZE, ELF_PROG_LOAD, PHDR_SIZE};
 use crate::lib::string::{safestrcpy, strlen};
@@ -65,10 +64,12 @@ pub unsafe fn exec(path: *const u8, argv: &[*const u8]) -> i32 {
     let proc = myproc();
     let mut ustack = [0u32; 3 + MAXARG + 1];
 
-    let mut ip = unsafe { namei(path as *mut u8) };
-    if ip.is_null() {
-        return -1;
-    }
+    // m4r-s2b: the VFS-glue walk (dcache + vtable lookup); Err folds
+    // to the legacy null-miss spelling.
+    let mut ip = match crate::fs::vfs_glue::kern_namei_c(path) {
+        Ok(ip) => ip,
+        Err(_) => return -1,
+    };
     unsafe { ilock(ip) };
     let mut pgdir: *mut u32 = null_mut();
 

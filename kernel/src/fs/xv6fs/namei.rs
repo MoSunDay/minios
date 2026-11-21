@@ -241,6 +241,7 @@ unsafe fn namex(path: *const u8, nameiparent: bool, name: &mut [u8; DIRSIZ]) -> 
 ///
 /// # Safety
 /// `path` must be a NUL-terminated path (may point into user memory).
+#[allow(dead_code)] // m4r-s2b: superseded by vfs_glue::kern_namei; kept as the reference port
 pub unsafe fn namei(path: *const u8) -> *mut Inode {
     // SAFETY: caller guarantees a NUL-terminated path; name is DIRSIZ
     // scratch bytes on this stack frame, as in fs.c namei().

@@ -1,25 +1,27 @@
-//! syspath.rs: the namespace half of xv6 sysfile.c — open/mknod/mkdir/
-//! chdir/unlink/link plus the shared create() helper. Writers wrap their
-//! inode updates in begin_op/end_op exactly like xv6-public's
-//! begin_trans/commit_trans pairs.
+//! syspath.rs: the namespace syscalls over the m4r-s2b VFS glue —
+//! kern_namei/kern_create/kern_unlink/kern_link walk the dcache and
+//! dispatch through the ops vtables (vfs_glue), folding VfsErr to
+//! errnos at this edge. What stays here: the copyinstr path bounce,
+//! fd allocation, and open(2)'s descriptor plumbing (the file
+//! read/write path stays legacy this milestone; s3 redirects it).
 //!
-//! User path strings bounce through copyinstr (EFAULT on fault) per this
-//! kernel's uaccess discipline; xv6's blanket -1 failures are spelled as
-//! Linux errnos (plans/linux26/02 §5).
-
-use core::mem::size_of;
+//! Legacy spellings kept byte-for-byte: every create-family failure
+//! folds to EEXIST (xv6's create() returns null for both a missing
+//! parent and a type conflict), O_TRUNC/O_EXCL stay ignored, and
+//! chdir's ENOTDIR is a direct type check on the resolved inode (not
+//! the walk's NotDir→ENOENT fold).
 
 use crate::fs::file_table::{filealloc, fileclose, File, FileState};
-use crate::fs::xv6fs::inode::{
-    ialloc, ilock, iput, iunlock, iunlockput, iupdate, readi, writei, Inode,
+use crate::fs::vfs_glue::{
+    dput_unlocked, errno_of, kern_create, kern_link, kern_namei, kern_namei_d, kern_unlink,
+    CreateKind,
 };
-use crate::fs::xv6fs::layout::{Dirent, DIRSIZ, T_DEV, T_DIR, T_FILE};
+use crate::fs::xv6fs::inode::{ilock, iput, iunlock, iunlockput};
+use crate::fs::xv6fs::layout::T_DIR;
 use crate::fs::xv6fs::log::{begin_op, end_op};
-use crate::fs::xv6fs::namei::{dirlink, dirlookup, namecmp, namei, nameiparent};
-use crate::mm::uaccess;
 use crate::proc::proc::myproc;
 
-use abi::{EEXIST, EINVAL, EISDIR, ENOENT, ENOTDIR, ENOTEMPTY, O_CREAT, O_RDWR, O_WRONLY};
+use abi::{EEXIST, EISDIR, ENOTDIR, O_CREAT, O_RDWR, O_WRONLY};
 
 /// Kernel-side path buffer bound (xv6 has no MAXPATH; paths are only ever
 /// component-bound by DIRSIZ in namei, so a modest bound suffices).
@@ -29,75 +31,22 @@ pub(crate) const MAXPATH: usize = 128;
 /// -EFAULT/-ENAMETOOLONG.
 pub(crate) fn copy_path(dst: &mut [u8; MAXPATH], src: usize) -> i64 {
     if src == 0 {
-        return uaccess::EFAULT;
+        return crate::mm::uaccess::EFAULT;
     }
-    let r = uaccess::copyinstr(dst, src as *const u8);
+    let r = crate::mm::uaccess::copyinstr(dst, src as *const u8);
     if r != 0 {
         return r;
     }
     0
 }
 
-/// sysfile.c create(): allocate an inode of `type_` for `path` (or return
-/// the existing one when the type matches); callers must already be inside
-/// a begin_op/end_op transaction. Returns a LOCKED inode or null.
-///
-/// SAFETY: process context inside an open transaction.
-unsafe fn create(path: *const u8, type_: i16, major: i16, minor: i16) -> *mut Inode {
-    let mut name = [0u8; DIRSIZ];
-    // SAFETY: nameiparent balances locks; dirlookup/ialloc per protocol.
-    unsafe {
-        let dp = nameiparent(path, &mut name);
-        if dp.is_null() {
-            return core::ptr::null_mut();
-        }
-        ilock(dp);
-        let ip = dirlookup(dp, name.as_ptr(), core::ptr::null_mut());
-        if !ip.is_null() {
-            // sysfile.c create(): an existing entry is reused only for
-            // file-on-file; mkdir on anything existing (or open(O_CREAT)
-            // over a dir) fails. This is what usertests fourteen relies on.
-            iunlockput(dp);
-            ilock(ip);
-            if type_ == T_FILE && (*ip).type_ == T_FILE {
-                return ip;
-            }
-            iunlockput(ip);
-            return core::ptr::null_mut();
-        }
-
-        let ip = ialloc((*dp).dev, type_);
-        if ip.is_null() {
-            panic!("create: ialloc");
-        }
-
-        ilock(ip);
-        (*ip).major = major;
-        (*ip).minor = minor;
-        (*ip).nlink = 1;
-        iupdate(ip);
-
-        if type_ == T_DIR {
-            // Create . and .. entries; ".." bumps dp->nlink (fs.c create).
-            (*dp).nlink += 1;
-            iupdate(dp);
-            if dirlink(ip, b".\0".as_ptr(), (*ip).inum) < 0
-                || dirlink(ip, b"..\0".as_ptr(), (*dp).inum) < 0
-            {
-                panic!("create dots");
-            }
-        }
-
-        if dirlink(dp, name.as_ptr(), (*ip).inum) < 0 {
-            panic!("create: dirlink");
-        }
-
-        iunlockput(dp);
-        ip
-    }
+/// Length of a NUL-terminated path inside a MAXPATH buffer.
+fn path_len(c: &[u8]) -> usize {
+    c.iter().position(|&b| b == 0).unwrap_or(c.len())
 }
 
-/// open(2) (sysfile.c sys_open). Linux flag bits (abi crate).
+/// open(2) (sysfile.c sys_open tail): resolve or create through the
+/// glue, then the legacy descriptor plumbing.
 pub fn sys_open(path: usize, flags: u64) -> i64 {
     let mut cpath = [0u8; MAXPATH];
     let r = copy_path(&mut cpath, path);
@@ -105,28 +54,27 @@ pub fn sys_open(path: usize, flags: u64) -> i64 {
         return r;
     }
     let omode = flags as u32;
+    let n = path_len(&cpath);
     // SAFETY: cpath NUL-terminated; inode/file protocol balanced.
     unsafe {
-        let ip: *mut Inode;
-        if omode & (O_CREAT as u32) != 0 {
-            begin_op();
-            ip = create(cpath.as_ptr(), T_FILE, 0, 0);
-            end_op();
-            if ip.is_null() {
-                return EEXIST;
+        let ip = if omode & (O_CREAT as u32) != 0 {
+            // Legacy create() folds EVERY failure to null→EEXIST
+            // (missing parent included).
+            match kern_create(&cpath[..n], CreateKind::File) {
+                Ok(ip) => ip,
+                Err(_) => return EEXIST,
             }
         } else {
-            ip = namei(cpath.as_ptr());
-            if ip.is_null() {
-                return ENOENT;
+            match kern_namei(&cpath[..n]) {
+                Ok(ip) => ip,
+                Err(e) => return errno_of(e), // NoEnt/NotDir → ENOENT
             }
-            ilock(ip);
-            if (*ip).type_ == T_DIR && omode & 3 != 0 {
-                iunlockput(ip);
-                return EISDIR;
-            }
+        };
+        ilock(ip);
+        if (*ip).type_ == T_DIR && omode & 3 != 0 {
+            iunlockput(ip);
+            return EISDIR;
         }
-
         let f = filealloc();
         if f.is_null() {
             iunlockput(ip);
@@ -167,24 +115,22 @@ pub(crate) unsafe fn fdalloc(f: *mut File) -> i32 {
     -1
 }
 
-/// mknod(2) (sysfile.c sys_mknod): create a device inode.
+/// mknod(2) (sysfile.c sys_mknod): create a device inode through the
+/// dedicated adapter spelling (the frozen vtable create carries no
+/// rdev pair).
 pub fn sys_mknod(path: usize, major: u64, minor: u64) -> i64 {
     let mut cpath = [0u8; MAXPATH];
     let r = copy_path(&mut cpath, path);
     if r != 0 {
         return r;
     }
-    // SAFETY: wrapped in a transaction like xv6's begin/commit pair.
-    unsafe {
-        begin_op();
-        let ip = create(cpath.as_ptr(), T_DEV, major as i16, minor as i16);
-        end_op();
-        if ip.is_null() {
-            return EEXIST;
-        }
-        iunlockput(ip);
+    match kern_create(
+        &cpath[..path_len(&cpath)],
+        CreateKind::Dev(major as i16, minor as i16),
+    ) {
+        Ok(_) => 0,
+        Err(_) => EEXIST, // legacy create-null spelling
     }
-    0
 }
 
 /// mkdir(2) (sysfile.c sys_mkdir).
@@ -194,142 +140,61 @@ pub fn sys_mkdir(path: usize) -> i64 {
     if r != 0 {
         return r;
     }
-    // SAFETY: wrapped in a transaction; create links the dots.
-    unsafe {
-        begin_op();
-        let ip = create(cpath.as_ptr(), T_DIR, 0, 0);
-        end_op();
-        if ip.is_null() {
-            return EEXIST;
-        }
-        iunlockput(ip);
+    match kern_create(&cpath[..path_len(&cpath)], CreateKind::Dir) {
+        Ok(_) => 0,
+        Err(_) => EEXIST, // legacy create-null spelling
     }
-    0
 }
 
-/// chdir(2) (sysfile.c sys_chdir): swap myproc()->cwd.
+/// chdir(2) (sysfile.c sys_chdir): swap myproc()->cwd (inode + dentry
+/// shadow together).
 pub fn sys_chdir(path: usize) -> i64 {
     let mut cpath = [0u8; MAXPATH];
     let r = copy_path(&mut cpath, path);
     if r != 0 {
         return r;
     }
-    // SAFETY: namei/ilock/iput protocol balanced; cwd ref transferred.
+    let (ip, d) = match kern_namei_d(&cpath[..path_len(&cpath)]) {
+        Ok(x) => x,
+        Err(e) => return errno_of(e),
+    };
+    // SAFETY: namei/ilock/iput protocol balanced; cwd refs transferred.
     unsafe {
-        let ip = namei(cpath.as_ptr());
-        if ip.is_null() {
-            return ENOENT;
-        }
         ilock(ip);
         if (*ip).type_ != T_DIR {
             iunlockput(ip);
+            dput_unlocked(d);
             return ENOTDIR;
         }
         iunlock(ip);
         let p = myproc();
         let old = (*p).cwd;
+        let old_d = (*p).cwd_d;
         (*p).cwd = ip;
+        (*p).cwd_d = d;
         if !old.is_null() {
             begin_op();
             iput(old);
             end_op();
         }
+        if !old_d.is_null() {
+            dput_unlocked(old_d);
+        }
     }
     0
 }
 
-/// Is directory `dp` (locked) empty apart from "." and ".."?
-/// (sysfile.c isdirempty)
-///
-/// SAFETY: dp locked.
-unsafe fn isdirempty(dp: *mut Inode) -> bool {
-    let mut de = Dirent::default();
-    let mut off: u32 = 2 * size_of::<Dirent>() as u32;
-    // SAFETY: dp locked T_DIR; readi through the file layer core.
-    unsafe {
-        while off < (*dp).size {
-            if readi(
-                dp,
-                &mut de as *mut Dirent as *mut u8,
-                off,
-                size_of::<Dirent>() as u32,
-            ) != size_of::<Dirent>() as i32
-            {
-                panic!("isdirempty: readi");
-            }
-            if de.inum != 0 {
-                return false;
-            }
-            off += size_of::<Dirent>() as u32;
-        }
-    }
-    true
-}
-
-/// unlink(2) (sysfile.c sys_unlink).
+/// unlink(2) (sysfile.c sys_unlink; folds rmdir).
 pub fn sys_unlink(path: usize) -> i64 {
     let mut cpath = [0u8; MAXPATH];
     let r = copy_path(&mut cpath, path);
     if r != 0 {
         return r;
     }
-    // SAFETY: one transaction around the dirent removal + nlink updates.
-    unsafe {
-        let mut name = [0u8; DIRSIZ];
-        begin_op();
-        let dp = nameiparent(cpath.as_ptr(), &mut name);
-        if dp.is_null() {
-            end_op();
-            return ENOENT;
-        }
-        ilock(dp);
-        // Cannot unlink "." or ".." (fs.c sys_unlink): the entry resolves
-        // to `dp` itself, so a later ilock(ip) would self-deadlock.
-        if namecmp(name.as_ptr(), b".\0".as_ptr()) == 0
-            || namecmp(name.as_ptr(), b"..\0".as_ptr()) == 0
-        {
-            iunlockput(dp);
-            end_op();
-            return EINVAL;
-        }
-        let mut off: u32 = 0;
-        let ip = dirlookup(dp, name.as_ptr(), &raw mut off);
-        if ip.is_null() {
-            iunlockput(dp);
-            end_op();
-            return ENOENT;
-        }
-        ilock(ip);
-        if (*ip).nlink < 1 {
-            panic!("unlink: nlink < 1");
-        }
-        if (*ip).type_ == T_DIR && !isdirempty(ip) {
-            iunlockput(ip);
-            iunlockput(dp);
-            end_op();
-            return ENOTEMPTY;
-        }
-        let mut de = Dirent::default();
-        if writei(
-            dp,
-            &mut de as *mut Dirent as *const u8,
-            off,
-            size_of::<Dirent>() as u32,
-        ) != size_of::<Dirent>() as i32
-        {
-            panic!("unlink: writei");
-        }
-        if (*ip).type_ == T_DIR {
-            (*dp).nlink -= 1;
-            iupdate(dp);
-        }
-        iunlockput(dp);
-        (*ip).nlink -= 1;
-        iupdate(ip);
-        iunlockput(ip);
-        end_op();
+    match kern_unlink(&cpath[..path_len(&cpath)]) {
+        Ok(()) => 0,
+        Err(e) => errno_of(e),
     }
-    0
 }
 
 /// link(2) (sysfile.c sys_link).
@@ -344,52 +209,8 @@ pub fn sys_link(oldpath: usize, newpath: usize) -> i64 {
     if r != 0 {
         return r;
     }
-    // SAFETY: transaction wraps the nlink bump + new dirent.
-    unsafe {
-        begin_op();
-        let ip = namei(cold.as_ptr());
-        if ip.is_null() {
-            end_op();
-            return ENOENT;
-        }
-        ilock(ip);
-        if (*ip).type_ == T_DIR {
-            iunlockput(ip);
-            end_op();
-            return abi::EPERM;
-        }
-        (*ip).nlink += 1;
-        iupdate(ip);
-        iunlock(ip);
-
-        let mut name = [0u8; DIRSIZ];
-        let dp = nameiparent(cnew.as_ptr(), &mut name);
-        if dp.is_null() {
-            link_bad_unwind(ip);
-            return ENOENT;
-        }
-        ilock(dp);
-        if (*dp).dev != (*ip).dev || dirlink(dp, name.as_ptr(), (*ip).inum) < 0 {
-            iunlockput(dp);
-            link_bad_unwind(ip);
-            return abi::EIO;
-        }
-        iunlockput(dp);
-        iput(ip);
-        end_op();
-    }
-    0
-}
-
-/// link-failure unwind (sysfile.c `bad:` label): drop the extra nlink.
-///
-/// SAFETY: ip holds the bumped-but-unlinked nlink, unlocked.
-unsafe fn link_bad_unwind(ip: *mut Inode) {
-    unsafe {
-        ilock(ip);
-        (*ip).nlink -= 1;
-        iupdate(ip);
-        iunlockput(ip);
-        end_op();
+    match kern_link(&cold[..path_len(&cold)], &cnew[..path_len(&cnew)]) {
+        Ok(()) => 0,
+        Err(e) => errno_of(e),
     }
 }

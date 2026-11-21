@@ -6,6 +6,7 @@
 pub mod buffer;
 pub mod file_table;
 pub mod vfs;
+pub mod vfs_glue;
 pub mod xv6fs;
 
 /// Block size in bytes (tools/fs.h BSIZE; shared with mkfs).

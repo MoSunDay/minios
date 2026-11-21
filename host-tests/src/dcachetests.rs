@@ -294,3 +294,85 @@ fn icache_find_refs_and_prune() {
     assert!(ic.find(1, 1).is_null());
     assert_eq!(ic.stats.live, 0);
 }
+
+/// s2b invalidate: absent and already-negative names are Miss; an idle
+/// positive leaf detaches fully (Detached) with lookup now missing and
+/// the slot reusable only after recycle.
+#[test]
+fn dcache_invalidate_idle_leaf_detaches() {
+    let mut dc = tree();
+    let root = dc.root;
+    assert_eq!(
+        dc.invalidate(root, b"zzz"),
+        crate::vfs::dcache::InvalidateOutcome::Miss
+    );
+    // Fresh negative caches the miss; invalidating it again stays Miss.
+    dc.add_negative(root, b"neg").unwrap();
+    assert_eq!(
+        dc.invalidate(root, b"neg"),
+        crate::vfs::dcache::InvalidateOutcome::Miss
+    );
+    // "a" is an idle positive leaf (tree() dput it).
+    let before = dc.stats.live;
+    match dc.invalidate(root, b"a") {
+        crate::vfs::dcache::InvalidateOutcome::Detached(d) => {
+            assert_eq!(unsafe { (*d).refcount() }, 0);
+            // Deferred-free protocol: not on the free list until recycle.
+            let hit = dc.lookup(root, b"a");
+            assert!(hit.is_null());
+            let det = d;
+            dc.recycle(det);
+        }
+        other => panic!("expected Detached, got {:?}", other),
+    }
+    assert_eq!(dc.stats.live, before - 1);
+    // Recycled slot is allocatable again.
+    let d = dc.insert(root, b"c", inode(S_IFREG | 0o644, 9)).unwrap();
+    dc.dput(d);
+    assert!(!dc.lookup(root, b"c").is_null());
+}
+
+/// s2b invalidate: a referenced entry (walk/cwd holds it) negates in
+/// place — name lookups miss afterwards, the holder's object stays
+/// sane, and a following insert re-flips it positive.
+#[test]
+fn dcache_invalidate_busy_negates_in_place() {
+    let mut dc = tree();
+    let root = dc.root;
+    let hit = dc.lookup(root, b"a");
+    let a = dc.dget(hit); // simulate a cwd/open walk ref
+    assert_eq!(
+        dc.invalidate(root, b"a"),
+        crate::vfs::dcache::InvalidateOutcome::Negated
+    );
+    let hit = dc.lookup(root, b"a");
+    assert!(!hit.is_null() && unsafe { (*hit).is_negative() });
+    assert_eq!(unsafe { (*a).refcount() }, 1); // holder unaffected
+                                               // Re-create the same name: the negative flips in place, holder's
+                                               // dentry is the same object it pinned.
+    let a2 = dc.insert(root, b"a", inode(S_IFREG | 0o644, 3)).unwrap();
+    assert_eq!(a2, a);
+    dc.dput(a2);
+    dc.dput(a);
+    assert_eq!(unsafe { (*a).refcount() }, 0);
+}
+
+/// s2b invalidate: a busy DIRECTORY (has children) negates in place
+/// even with d_ref == 0 — children pin their parent slot.
+#[test]
+fn dcache_invalidate_parent_with_children_negates() {
+    let mut dc = tree();
+    let root = dc.root;
+    // "s" is idle but has child "b".
+    let s = dc.lookup(root, b"s");
+    assert_eq!(unsafe { (*s).refcount() }, 0);
+    assert_eq!(
+        dc.invalidate(root, b"s"),
+        crate::vfs::dcache::InvalidateOutcome::Negated
+    );
+    assert!(unsafe { (*dc.lookup(root, b"s")).is_negative() });
+    // Child "b" survives under the negated parent (referenced holders
+    // keep a sane subtree); pruning still walks it.
+    let b = dc.lookup(s, b"b");
+    assert!(!b.is_null() && !unsafe { (*b).is_negative() });
+}

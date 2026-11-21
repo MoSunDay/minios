@@ -96,6 +96,25 @@ unsafe fn release(l: &Spinlock<()>) {
     l.raw_release();
 }
 
+/// Count table slots with ref == 0 — the glue's inode-pressure probe.
+/// Cached dentry wrappers pin slots with iget refs; when free slots run
+/// low the glue prunes idle dentries (wrapper iput frees the slot)
+/// before calling back into the fs. Read-only scan under the table lock.
+pub fn free_slots() -> usize {
+    // SAFETY: ref-count scan under ICACHE_LOCK (fs.c iget protocol).
+    unsafe {
+        acquire(&ICACHE_LOCK);
+        let mut n = 0usize;
+        for i in 0..NINODE {
+            if (*(&raw mut ICACHE.inode[i])).ref_ == 0 {
+                n += 1;
+            }
+        }
+        release(&ICACHE_LOCK);
+        n
+    }
+}
+
 /// Find the inode with number inum on device dev and return the in-memory
 /// copy. Does not lock the inode and does not read it from disk. (fs.c iget)
 ///

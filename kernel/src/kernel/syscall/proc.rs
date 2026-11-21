@@ -109,10 +109,11 @@ pub(super) fn sys_execve(tf: &mut Trapframe, path: usize, argv: usize) -> i64 {
     // iunlockput; read-only, so no log transaction).
     // SAFETY: cpath is NUL-terminated; the inode protocol is balanced on
     // every path and the reader runs only while the lock is held.
-    let ip = unsafe { crate::fs::xv6fs::namei::namei(name.as_ptr()) };
-    if ip.is_null() {
-        return ENOENT;
-    }
+    // m4r-s2b: the VFS-glue walk; Err folds to the legacy miss.
+    let ip = match crate::fs::vfs_glue::kern_namei_c(name.as_ptr()) {
+        Ok(ip) => ip,
+        Err(_) => return ENOENT,
+    };
     unsafe { crate::fs::xv6fs::inode::ilock(ip) };
     let fsize = unsafe { (*ip).size } as usize;
     let read = |dst: &mut [u8], off: u32| unsafe {

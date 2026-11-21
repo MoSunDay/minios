@@ -24,7 +24,26 @@ use super::{VfsErr, VfsResult};
 
 pub use super::dentry::Dentry;
 
+/// Result of a coherence invalidation (unlink/rmdir/rename-over).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InvalidateOutcome {
+    /// No positive entry under the name (absent or already negative).
+    Miss,
+    /// Entry referenced (walk/cwd/mount) or a parent: it stays in the
+    /// tree but turns negative, so later lookups miss while the old
+    /// reference holders keep a sane object.
+    Negated,
+    /// Idle leaf fully retired here (off tree, off LRU, counters done)
+    /// EXCEPT the free-list return: the caller owns the slot and must
+    /// hand it back via `recycle` — the kernel glue defers that through
+    /// call_rcu so lockless readers drain before reuse (s2b).
+    Detached(*mut Dentry),
+}
+
 pub struct Dcache {
+    /// Owner callback for a retiring POSITIVE entry (the kernel glue
+    /// releases the wrapper its d_inode names). No-op until set.
+    pub dispose: fn(*mut Dentry),
     pub(super) pool: *mut Dentry,
     pub(super) cap: usize,
     pub(super) free: *mut Dentry,
@@ -37,6 +56,7 @@ pub struct Dcache {
 impl Dcache {
     pub const fn new() -> Dcache {
         Dcache {
+            dispose: |_| {},
             pool: core::ptr::null_mut(),
             cap: 0,
             free: core::ptr::null_mut(),
@@ -216,6 +236,48 @@ impl Dcache {
         self.child_unlink(d);
     }
 
+    /// Invalidate one child name (namespace coherence for
+    /// unlink/rmdir/rename-over): an idle positive leaf is retired up
+    /// to (but not including) the free-list push — `Detached` hands
+    /// the slot to the caller for a deferred `recycle`; a referenced
+    /// or child-bearing entry converts to negative in place; absent or
+    /// already-negative names are `Miss`.
+    pub fn invalidate(&mut self, parent: *mut Dentry, name: &[u8]) -> InvalidateOutcome {
+        let hit = self.lookup(parent, name);
+        if hit.is_null() {
+            return InvalidateOutcome::Miss;
+        }
+        // SAFETY: hit is a live child of parent.
+        let e = unsafe { &mut *hit };
+        if e.is_negative() {
+            return InvalidateOutcome::Miss;
+        }
+        if e.d_ref == 0 && e.d_first_child.is_null() {
+            self.child_unlink(hit);
+            self.lru_unlink(hit); // idle ⇔ on LRU (invariant)
+            self.stats.live -= 1;
+            self.stats.evicts += 1;
+            InvalidateOutcome::Detached(hit)
+        } else {
+            e.d_flags |= super::dentry::D_NEGATIVE;
+            e.d_inode = core::ptr::null_mut();
+            self.stats.neg_entries += 1;
+            InvalidateOutcome::Negated
+        }
+    }
+
+    /// Return a `Detached` slot to the free list. Must not be called
+    /// before the deferred-free grace period the caller requires.
+    pub fn recycle(&mut self, d: *mut Dentry) {
+        debug_assert_eq!(unsafe { (*d).d_ref }, 0);
+        debug_assert!(unsafe { (*d).d_pprev.is_null() }, "recycle while attached");
+        // SAFETY: caller owns the retired slot exclusively.
+        unsafe {
+            (*d).d_next = self.free;
+        }
+        self.free = d;
+    }
+
     /// True when `maybe_desc` is `anc` itself or below it in the tree.
     pub(super) fn is_ancestor_or_self(&self, anc: *mut Dentry, maybe_desc: *mut Dentry) -> bool {
         let mut cur = maybe_desc;
@@ -276,6 +338,8 @@ impl Dcache {
         debug_assert!(unsafe { (*d).d_pprev.is_null() }, "retire while attached");
         if neg {
             self.stats.neg_entries -= 1;
+        } else {
+            (self.dispose)(d); // release the wrapper before reuse
         }
         if on_lru {
             self.lru_unlink(d);

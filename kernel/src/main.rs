@@ -145,6 +145,9 @@ fn init_m1r_fs() {
     fs::xv6fs::log::loginit(fs::xv6fs::layout::ROOTDEV);
     fs::xv6fs::iinit();
     drivers::char::console::consoleinit();
+    // m4r-s2b: mount the root through the VFS glue (root wrapper +
+    // dcache prime) before the first process takes its cwd.
+    unsafe { fs::vfs_glue::init() };
 }
 
 pub(crate) fn m1r_fatal(why: &str) -> ! {

@@ -114,3 +114,52 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   `45cf8a2b…f70`、m1r-fault `855f856a…808`/`f702cdf2…8ca5`、m2
   `d376e5b4…d019`、m3 `e7b5a2fc…1b1e`）。内核 ELF 哈希随符号路径变化
   （`767e4ae7…`→`eb323447…`，预期非钉值）。
+
+### m4r-s2b（VFS 内核胶水：vfs_glue 五文件 + 全路径接线 + m1r-user 泄漏攻坚，2026-11-21）
+
+- 交付：`kernel/src/fs/vfs_glue/`（mod 397 / mutate 377 / xv6_adapt 374 /
+  xv6_obj 141 / wrapper 122，全 ≤400）——dcache(256) wrapper 钉 legacy inode
+  表(NINODE=50) 引用的完整胶水：walk/step（锁内 dcache、锁外 fs op、重查竞态
+  收敛冗余 wrapper）、kern_create/kern_unlink/kern_link 三相（resolve+pin /
+  fs-op unlocked / cohere）、zombie（nlink=0 最终 iput 延迟到进程上下文
+  begin_op 事务）+ call_rcu 延迟槽回收（ADR-0022 首个真实消费者）。接线：
+  main 挂载根 dentry、syspath 全量改走 kern_*、exec/sys_execve/m1r-suite
+  case_fs_file 改 kern_namei_c、proc fork/exit/chdir 持 cwd dentry 引用、
+  dcache 加 dispose 钩子+alloc 空闲链 prune+invalidate/recycle、inode.rs
+  新增 `free_slots()`、abi 补 ELOOP。legacy namei 保留为参考移植
+  （#[allow(dead_code)]）。
+- 关键纪律：`mod.rs` 自由函数 `dput()` 更名 `dput_unlocked` 并文档化——持
+  DENTRY_LOCK 临界区内唯一合法拼法是 `dc().dput(d)`（非重入自旋锁，误用即
+  自锁死；本轮实际死锁根因）。
+- m1r-user 连修六类 bug 后 45/45（createtest/rmdot/fourteen/bigwrite/bigfile/
+  subdir/linkunlink/linktest/unlinkread/createdelete…全 PASS）：
+  1. iget 表穷尽 → 新增 `relieve_inode_pressure(need)`（DENTRY_LOCK 下
+     `while free_slots<need { prune_lru(1) }`，LRU 干则 break），接线
+     step_locked lookup 前 + create/unlink/link phase B 前；
+  2. fourteen → legacy skipelem/namecmp 只比较前 DIRSIZ 字节：parent_locked
+     终组件、step_locked 每 comp 入口截断；
+  3. ilock ref<1 panic → `kern_namei_d` 契约 = 返回 (idup 过的 ip, pinned d)
+     （chdir/exit 配平；不 idup 则 proc.cwd 吃 wrapper 引用→双重 iput）；
+  4. subdir "dd/ff/ff" file-作-父探针 → create_common/xv6_unlink/xv6_link
+     三写者补 `dp->type != T_DIR` 检查（折 EEXIST/ENOENT/回退 nlink）；
+  5. walk 全部 Err 路径 `dc().dput(cur)`、step_locked insert-Err
+     release_wrapper（否则泄漏钉死 root/iget 表）；
+  6. **最终根因（本轮主攻坚）**：`kern_namei` 在 `kern_namei_d` 已 idup 的
+     结果上再次 idup——每次成功 lookup 净 +1 引用泄漏，电池累计 59 个恰好
+     耗尽 50 槽表（DS=59 与泄漏量相等纯属巧合）。诊断方法：iget/idup/iput/
+     wrap_new/release/zombie/dispose 逐 inum 打点，事件台账对账（孤立
+     createdelete 即复现：每个幸存文件净 +1，验证期 open 呈 d/d/u 双取单还）。
+     修法：kern_namei 直通返回 kern_namei_d 的 idup 引用。同类清理：
+     create_common EEXIST 分支与 xv6_unlink NotEmpty 分支的 dirlookup 引用
+     补 iput（先误用 iunlockput 触发 iunlock panic——ilock/iunlock 对已闭合，
+     必须纯 iput）。
+- gate：make all 0 警告 / fmt-check / check-rust-only（files=175→180）/
+  test-host 176（99+72+5）；QEMU 电池 7 目标全 PASS（smoke×2/m1r-suite/
+  **m1r-user 45+coverage**/m1r-fault/m2 16/m3 22）。
+- 钉值重钉（4 项，均归因）：m1r-suite root `341ae68a…`→`312ff398…`、
+  m1r-user root `45cf8a2b…`→`5a040446…`（wrapper 钉引用改变 iget/ialloc 时
+  序→盘上 inode 分配序变）；m1r-fault serial `855f856a…`→`cc198eaa…`
+  （内核 ELF 变化→RIP 偏移）；m2 serial `d376e5b4…`→`a97db394…`（胶水池
+  改变启动空闲页水位行）。**不变（强证据）**：m0r/m1r-suite/m1r-user/m3
+  serial 与 s2a 逐字节一致——尤其 m1r-user serial `da87aa63…f6f6` 意味着
+  胶水路径在 45 用例全电池上与 legacy namei 行为字节等价。

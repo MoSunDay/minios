@@ -70,6 +70,7 @@ pub unsafe fn allocproc() -> *mut Proc {
         (*p).xstate = 0;
         (*p).chan = 0;
         (*p).cwd = null_mut();
+        (*p).cwd_d = null_mut();
         for fd in 0..(*p).ofile.len() {
             (*p).ofile[fd] = null_mut();
         }
@@ -116,6 +117,7 @@ pub unsafe fn freeproc(p: *mut Proc) {
         (*p).ofile[fd] = null_mut();
     }
     (*p).cwd = null_mut();
+    (*p).cwd_d = null_mut();
     (*p).pid = 0;
     // Fresh CFS identity and Normal policy for the reused slot (nice 0,
     // empty history; fork re-inherits policy/priority below).
@@ -158,6 +160,10 @@ pub fn exit(status: i32) -> ! {
             crate::fs::xv6fs::inode::iput((*p).cwd);
             crate::fs::xv6fs::log::end_op();
             (*p).cwd = core::ptr::null_mut();
+        }
+        if !(*p).cwd_d.is_null() {
+            crate::fs::vfs_glue::dput_unlocked((*p).cwd_d);
+            (*p).cwd_d = core::ptr::null_mut();
         }
         let _guard = PTABLE_LOCK.lock();
         // Reparent orphans (xv6 exit): children must not keep a parent
@@ -322,6 +328,7 @@ pub fn fork() -> i32 {
         );
         if !(*me).cwd.is_null() {
             (*np).cwd = crate::fs::xv6fs::inode::idup((*me).cwd);
+            (*np).cwd_d = crate::fs::vfs_glue::dget((*me).cwd_d);
         }
     }
     let pid = unsafe { (*np).pid };
@@ -401,6 +408,7 @@ pub fn userinit_named(image: &[u8], name: &[u8], argv: &[&[u8]]) -> bool {
                     crate::fs::xv6fs::layout::ROOTDEV,
                     crate::fs::xv6fs::layout::ROOTINO,
                 );
+                (*p).cwd_d = crate::fs::vfs_glue::root_dget();
                 let _guard = PTABLE_LOCK.lock();
                 // SAFETY: ptable lock held; p is EMBRYO, exclusively ours.
                 sched::runnable_new(p);

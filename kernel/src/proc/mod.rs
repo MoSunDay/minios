@@ -110,6 +110,9 @@ pub struct Proc {
     pub ofile: [*mut crate::fs::file_table::File; NOFILE],
     /// Current directory (xv6 proc.h cwd); set by userinit/chdir.
     pub cwd: *mut crate::fs::xv6fs::inode::Inode,
+    /// m4r-s2b: the dcache shadow of `cwd` (dentry ref; walks start
+    /// here for relative paths). fork dgets, exit dputs, chdir swaps.
+    pub cwd_d: *mut crate::fs::vfs::dentry::Dentry,
     pub name: [u8; 16],
 }
 
@@ -148,6 +151,7 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
         fpu: FpuArea([0; 512]),
         ofile: [core::ptr::null_mut(); NOFILE],
         cwd: core::ptr::null_mut(),
+        cwd_d: core::ptr::null_mut(),
         name: [0; 16],
     }
 }; NPROC];

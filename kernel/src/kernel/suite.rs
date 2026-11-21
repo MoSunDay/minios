@@ -260,7 +260,6 @@ fn case_fs_blockread() -> bool {
 fn case_fs_inode() -> bool {
     use crate::fs::xv6fs::inode::{ilock, iunlockput, readi};
     use crate::fs::xv6fs::layout::T_FILE;
-    use crate::fs::xv6fs::namei::namei;
 
     let check = |path: &str| -> bool {
         let Some(img) = super::userimg::lookup(path.as_bytes()) else {
@@ -270,10 +269,11 @@ fn case_fs_inode() -> bool {
         cpath[..path.len()].copy_from_slice(path.as_bytes());
         // SAFETY: cpath is NUL-terminated; the inode protocol is balanced
         // (namei -> ilock -> readi -> iunlockput), all under icache locks.
-        let ip = unsafe { namei(cpath.as_ptr()) };
-        if ip.is_null() {
-            return false;
-        }
+        // m4r-s2b: the VFS-glue walk; Err folds to the legacy miss.
+        let ip = match crate::fs::vfs_glue::kern_namei_c(cpath.as_ptr()) {
+            Ok(ip) => ip,
+            Err(_) => return false,
+        };
         unsafe { ilock(ip) };
         // SAFETY: ip is I_BUSY; header fields read under the inode lock.
         let ok = unsafe { (*ip).type_ == T_FILE && (*ip).size as usize == img.len() };
@@ -291,7 +291,7 @@ fn case_fs_inode() -> bool {
     };
 
     // SAFETY: NUL-terminated literal.
-    let miss = unsafe { namei(b"/enoent\0".as_ptr()) }.is_null();
+    let miss = crate::fs::vfs_glue::kern_namei_c(b"/enoent\0".as_ptr()).is_err();
     check("/m1r-suite") && check("/m1r-exec-child") && miss
 }
 
@@ -304,7 +304,6 @@ fn case_fs_file() -> bool {
     use crate::fs::file_table::{filealloc, fileclose, fileread, filestat, FileState};
     use crate::fs::xv6fs::inode::{ilock, iunlock, iunlockput};
     use crate::fs::xv6fs::layout::{Stat, T_FILE};
-    use crate::fs::xv6fs::namei::namei;
 
     let Some(img) = super::userimg::lookup(b"/m1r-suite") else {
         return false;
@@ -314,10 +313,11 @@ fn case_fs_file() -> bool {
     // SAFETY: mirrors sys_open: namei hands an iget'd reference, ilock
     // makes it valid, the reference moves into the file slot, and
     // fileclose later drops it through begin_op/iput/end_op.
-    let ip = unsafe { namei(cpath.as_ptr()) };
-    if ip.is_null() {
-        return false;
-    }
+    // m4r-s2b: the VFS-glue walk; Err folds to the legacy miss.
+    let ip = match crate::fs::vfs_glue::kern_namei_c(cpath.as_ptr()) {
+        Ok(ip) => ip,
+        Err(_) => return false,
+    };
     unsafe { ilock(ip) };
     let f = unsafe { filealloc() };
     if f.is_null() {

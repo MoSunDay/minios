@@ -92,6 +92,7 @@ pub const ERANGE: i64 = -34;
 pub const ENAMETOOLONG: i64 = -36;
 pub const ENOSYS: i64 = -38;
 pub const ENOTEMPTY: i64 = -39;
+pub const ELOOP: i64 = -40;
 
 /// open(2) flags (asm-generic, x86-64): the M1R subset. xv6's only
 /// extension O_CREATE maps to Linux O_CREAT (same semantic: create if
