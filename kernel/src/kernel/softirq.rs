@@ -16,13 +16,17 @@ use crate::klib::sync::Spinlock;
 use crate::proc::preempt::{in_softirq, local_bh_disable, local_bh_enable};
 use crate::proc::{kthread, sleep, waitqueue, Proc, ProcState};
 
-/// 2.6.11 softirq indices (include/linux/interrupt.h order).
+/// Softirq indices (include/linux/interrupt.h order). The table is
+/// compacted (no BLOCK/SCHED/HRTIRQ slots — 2.6.39.4 numbers TASKLET
+/// 6 and RCU 9); RCU rides slot 6 right behind TASKLET (m3r-s7) while
+/// TX/RX keep their Linux numbers.
 pub const HI_SOFTIRQ: usize = 0;
 pub const TIMER_SOFTIRQ: usize = 1;
 pub const NET_TX_SOFTIRQ: usize = 2;
 pub const NET_RX_SOFTIRQ: usize = 3;
 pub const TASKLET_SOFTIRQ: usize = 5;
-pub const NR_SOFTIRQS: usize = 6;
+pub const RCU_SOFTIRQ: usize = 6;
+pub const NR_SOFTIRQS: usize = 7;
 
 /// Max do_softirq restart loops before deferring to ksoftirqd.
 pub const MAX_SOFTIRQ_RESTART: usize = 10;

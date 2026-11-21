@@ -11,6 +11,8 @@ pub mod m2mem;
 pub mod m2suite;
 pub mod m3suite;
 pub mod oops;
+pub mod rcu;
+pub mod rcu_engine;
 pub mod signal;
 pub mod sigset;
 pub mod softirq;

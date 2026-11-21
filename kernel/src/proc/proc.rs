@@ -131,6 +131,7 @@ pub unsafe fn freeproc(p: *mut Proc) {
     // freeproc only through exit — the reset is belt-and-braces.
     (*p).alarm = crate::kernel::time::wheel::LrTimer::new();
     (*p).alarm_fired = 0;
+    (*p).rcu_read_nesting = 0;
     // Signal state: fresh slot = all-default dispositions, empty sets
     // (fork re-inherits below; pending never crosses fork/exec).
     (*p).sig_pending = 0;

@@ -78,6 +78,9 @@ pub fn tick(tf: &mut Trapframe) {
     super::syscall::on_tick(now);
     // SAFETY-free raise: bottom half deferred to irq_exit (21 §3).
     super::softirq::raise_softirq(super::softirq::TIMER_SOFTIRQ);
+    // RCU (21 §5): a user-mode tick is a quiescent state; a kernel
+    // tick opportunistically raises RCU_SOFTIRQ for pending batches.
+    crate::kernel::rcu::check_callbacks(tf.from_user());
     // Wake nanosleep sleepers (they re-check their deadline under
     // TICK_LOCK; xv6 wakeup(&ticks)) and preempt user contexts.
     // SAFETY: plain lock acquire/release in interrupt context.

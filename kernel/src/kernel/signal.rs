@@ -185,6 +185,10 @@ pub fn enter_handler(
 /// action or push an rt_sigframe and redirect to the handler. One
 /// signal per pass; nesting re-arms on later returns.
 pub fn userret_deliver(tf: &mut Trapframe) {
+    // Every traps/syscall return-to-user path funnels through here:
+    // user mode holds no RCU read sections, so this is a quiescent
+    // state (21 §5; still checked against parked kernel readers).
+    crate::kernel::rcu::user_return();
     let p = myproc();
     if p.is_null() {
         return;

@@ -184,6 +184,10 @@ pub unsafe fn sched_raw() {
         panic!("sched: interrupts enabled");
     }
     preempt::assert_preemptible();
+    // RCU quiescent state (21 §5): the outgoing context voluntarily
+    // swtches; suppressed while a reader parks mid-section. PTABLE_LOCK
+    // -> RCU_LOCK is the one documented nesting (rcu.rs module doc).
+    crate::kernel::rcu::note_context_switch();
     charge_curr(p);
     // addr_of_mut! on a static-mut field is the lint-blessed pointer form.
     let sched_ctx = addr_of_mut!(CPU0.scheduler);
@@ -402,6 +406,10 @@ pub fn scheduler() -> ! {
         }
         drop(guard);
         if !found {
+            // RCU (21 §5): the idle scheduler context is quiescent —
+            // keeps an open grace period from stalling while every
+            // proc blocks (idle liveness).
+            crate::kernel::rcu::note_idle();
             io::sti();
             io::hlt(); // wait for the timer to make someone runnable
         }
@@ -430,6 +438,9 @@ pub fn sched_drive(stop: fn() -> bool, max_steps: usize) -> bool {
             let p = pick_next_proc();
             if p.is_null() {
                 drop(guard);
+                // Same idle QS as scheduler(): a fully parked system
+                // still advances RCU (suite liveness; no GP stalls).
+                crate::kernel::rcu::note_idle();
                 io::cli();
                 return false;
             }

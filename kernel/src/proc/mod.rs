@@ -90,6 +90,9 @@ pub struct Proc {
     pub alarm: crate::kernel::time::wheel::LrTimer,
     /// Set by the alarm callback until SIGALRM delivery exists (s6).
     pub alarm_fired: i32,
+    /// RCU read-side audit nesting (21 §5): the sleep paths
+    /// debug-assert this is zero — read sections must not block.
+    pub rcu_read_nesting: u32,
     pub parent: *mut Proc,
     pub mm: Option<Mm>,
     pub tf: *mut Trapframe,
@@ -131,6 +134,7 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
         wait_link: waitqueue::WaitLink::new(),
         alarm: crate::kernel::time::wheel::LrTimer::new(),
         alarm_fired: 0,
+        rcu_read_nesting: 0,
         parent: core::ptr::null_mut(),
         mm: None,
         tf: core::ptr::null_mut(),

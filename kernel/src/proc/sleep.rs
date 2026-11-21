@@ -23,6 +23,7 @@ pub unsafe fn sleep(chan: usize, lk: &Spinlock<()>) {
     if p.is_null() {
         panic!("sleep without process");
     }
+    crate::kernel::rcu::debug_assert_no_reader(p);
     let same = from_ref(lk) == from_ref(&PTABLE_LOCK);
     if !same {
         // SAFETY: lk held; ptable lock free (not held by this context).
@@ -99,6 +100,7 @@ pub unsafe fn wq_sleep(
     if p.is_null() {
         panic!("wq_sleep without process");
     }
+    crate::kernel::rcu::debug_assert_no_reader(p);
     let same = from_ref(lk) == from_ref(&PTABLE_LOCK);
     if !same {
         // SAFETY: lk held; ptable lock free (not held by this context).

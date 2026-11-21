@@ -78,6 +78,7 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
     kernel::traps::init_idt();
     drivers::pic::init();
     kernel::softirq::init();
+    kernel::rcu::init();
     kernel::time::init_time();
     drivers::pic::unmask(0); // timer only
     proc::fpu::init_fpu();

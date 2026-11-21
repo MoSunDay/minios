@@ -450,7 +450,8 @@ fn sys_gettimeofday(tv: Option<usize>) -> i64 {
 
 /// alarm(2) (37): arm the process alarm wheel timer; returns the whole
 /// seconds (rounded up) remaining on the previous alarm, 0 if none.
-/// seconds == 0 cancels. Until SIGALRM (s6), expiry is xv6-kill.
+/// seconds == 0 cancels. Expiry (wheel callback alarm_fire, s6) marks
+/// alarm_fired and generates SIGALRM for delivery at user return.
 fn sys_alarm(seconds: i64) -> i64 {
     let p = crate::proc::proc::myproc();
     if p.is_null() {
