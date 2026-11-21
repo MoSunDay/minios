@@ -20,7 +20,7 @@
 | M0R | 工具锁、Multiboot1/ELF64、长模式、高半区、真实 QEMU smoke、CI workflow | 🟢 **done**（2026-11-16 判绿） | 净树 HEAD `4c22b7b` 全套 exit 0 + 三组 sha256 + CI 首跑 success：https://github.com/MoSunDay/minios/actions/runs/43886738739 |
 | M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟢 **done**（2026-11-19 判绿） | 净树 HEAD `ef2a335` 电池 9 步 EXIT0（smoke/m1r-suite/m1r-user 35+coverage/m1r-fault/demo-full，serial 钉值 `028048dd…`/`6137aefd…`/`0c39a3e5…`/`1ba8b13a…` 全复现）；CI run 44381221846 success；详见文末 M1R 判绿收口 |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | 🟡 **物理页基础已交付**（m2r-s1/s2，2026-11-19） | bootmem/buddy(双 zone)/directmap/SLUB/vmalloc+ioremap + m2 内核套件 9/9（`make test-qemu-m2`，exit 33）；host 26 例纯核单测；CI 接线；证据见文末 m2r 记录；匿名 VMA/brk/mmap/COW 待做 |
-| M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE | 🟡 **调度/时间/底半部已交付**（m3r-s1–s5，2026-11-20） | CFS+RT+waitqueue+时间层+kthread/workqueue/softirq 逐段电池全绿（m3-suite 16/16，`make test-qemu-m3`）；信号（s6）与 RCU/验收（s7）待做；证据见文末 m3r 记录 |
+| M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE、RCU | 🟢 **done**（m3r-s1–s7，2026-11-21 判绿） | CFS+RT+waitqueue+时间层+kthread/workqueue/softirq+信号+RCU 全链交付：m3-suite 22/22、m1r-user 45/45+coverage、host 156、QEMU 电池 6 目标 ×2 字节稳定（HEAD `d4bc6a7` 树）；证据见文末 m3r 记录 |
 | M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | ⬜ pending | 等 M3 全绿 |
 | M5 | 第二盘 ext4 RO 与 host/guest 黄金清单 | ⬜ pending | 等 M4 全绿；M5 起启用 host ext4 管线 |
 | M6 | 独立 `^has_journal` 副本 RW、htree/大文件/fsync | ⬜ pending | 等 M5 全绿 |
@@ -869,3 +869,36 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   内核镜像移位）；全部 ×2 字节稳定。
 - 决策：ADR-0021（sigframe/生成点三处/orig_ax 重启契约/errno
     透传/越过 IGN/与 2.6 的分歧清单）。
+
+### m3r-s7（RCU tiny + M3 收口，2026-11-21，判 🟢）
+
+- 交付（三段提交）：
+  - **s7a `21f3147`**：`kernel/rcu_engine.rs` 纯批量引擎（
+    nxt→cur→done，合并批语义；host include-by-path 9 例）+
+    `kernel/rcu.rs` 胶水（读标记/五处 QS：swtch、回用户、tick、
+    末读者补报、**调度器空转 liveness**/call_rcu/
+    synchronize_rcu=rcu_barrier/RCU_SOFTIRQ=6/sleep 路径读临界区
+    审计）；host 79。
+  - **s7b `d4bc6a7`**：m3 消费者 3 例（19→22）——basic_grace/
+    reader_defer/gen_swap_pressure（探针注册表换指针 + kmalloc/
+    kmfree 账户经 rcu_barrier 清零；`drive_rcu` 手工播放
+    irq_exit/ksoftirqd 交错；irq-exit 提前 drain 使相邻 retire
+    合并——GP 数调度依赖，锚定 invocations）；runner spec 22。
+  - **s7c**：ADR-0022 + ADR-0021 增补（userret_deliver 承载 RCU
+    回用户 QS）+ 本记录 + M3 判绿。
+- 调试期真实缺陷（两项已修，22 例承保）：PTABLE 守卫内调
+  kthread_reap 自死锁（改作用域先查后 reap）；SLUB 对象误用
+  页级 kfree（改 kmalloc/kmfree 成对）。
+- gate：make all 0 警告 /fmt/fmt-check/check-rust-only（files=
+  163）绿；host 156（79+72+5）；QEMU 电池 6 目标 PASS：m0r 6/6、
+  m1r 20/20、m1r-user 45/45 + coverage active=45 not-active=0、
+  m1r-fault 5/5、m2 16/16、m3 22/22。
+- 钉值：m0r `028048dd…20f1`、m1r-suite serial `6137aefd…e585`/
+  root `341ae68a…15ce`、m1r-user serial `da87aa63…f6f6`/root
+  `45cf8a2b…f70`、m1r-fault root `f702cdf2…8ca5` 均不变；**重钉
+  m1r-fault serial `855f856a…9080`（s7a/b 两轮镜像移位）、m2
+  serial `d376e5b4…d019`（镜像移位）、m3 serial `e7b5a2fc…1b1e`
+  （+3 例）**；全部 ×2 字节稳定。
+- 对账：00-scope §2「同步」行 Core 口径「锁层次 + RCU 基础 +
+  断言」已兑现（读标记/QS/callback/GP + sleep 审计）；dcache
+  类消费者按计划 M4+。M1R–M2 全回归随 6 目标电池在 s7b 树通过。

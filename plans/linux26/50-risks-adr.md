@@ -346,6 +346,9 @@
   代填（glibc 契约显式化）；同步信号内核栈内直接处置，无
   force_sig_info 队列；SIGKILL/Stop 不受掩码语义影响的完整集在
   M8 job control 补齐。
+- 增补（s7，ADR-0022）：userret_deliver 头部现承载 RCU 回用户
+  QS 上报（用户态不持读临界区；仍对 parked 内核读者检查）——
+  信号出口与 RCU 静默判定共用同一漏斗点。
 - 状态：已接受（m1r-user 39→45 例：sig.roundtrip / sig.mask_defer
   / ipc.sigpipe（默认死 wstatus&0x7f=13、阻塞/忽略存活返 -32 且
   无 pending）/ sig.except（默认+越过 IGN）/ sig.chld / sig.alarm
@@ -353,6 +356,62 @@
   绿；m0r/m1r-suite/m1r-fault/m3 串口钉值不变，m1r-fault/m1r-suite
   root 因用户 ELF 模板重钉，m2 串口因 vma 布局打印重钉——均 ×2
   字节稳定）。
+
+### ADR-0022 M3 s7（UP）：RCU tiny——纯批量引擎 + 五处 QS 上报 + 空转 liveness，读者延迟回收
+
+- 背景：21 §5——UP RCU 基础：读侧临界区标记、quiescent state、
+  callback 队列与 grace period；先服务可替换指针/小型配置数据
+  （dcache 类消费者 M4+ 落地，m3 用探针注册表先行承保）。
+- 结构（两段提交 s7a/s7b）：
+  - `kernel/rcu_engine.rs`（s7a，纯函数无内核依赖，host-tests
+    include-by-path 直测）：TINY 三链批量管线 nxt→cur→done（
+    RcuHead{next,func} 侵入式零分配链）；`queue_cb` 恒入 nxt，
+    `advance` 先开后收——cur 空且 nxt 非空时整体接走 nxt（**合并
+    批语义：GP 打开前入队的所有回调并成一批**，classic TINY
+    nextlist 累积），qs_pending 则本批收进 done；`note_qs(
+    readers_active)`：读者在内或无 GP 开 → 无操作 false，否则
+    qs_pending 并返回 may_complete（调用方 raise RCU_SOFTIRQ）；
+    `take_done` 锁外 FIFO invoke。host 9 例钉死：FIFO 链序/晚入
+    队另开 GP/nxt 合并（multiple_gp_boundaries：GP2 打开前
+    batch2+batch3 合并成 4 回调一批——正是 gen_swap_pressure 里
+    GP 数 < 批数的内核侧根源）/parked 读者抑制、末读者出释放。
+  - `kernel/rcu.rs`（s7a 胶水）：ACTIVE_READERS 全局计数 +
+    RCU_LOCK（PTABLE_LOCK→RCU_LOCK 唯一文档化嵌套——swtch QS
+    站点持 ptable）；**QS 五处上报**：sched_raw 自愿 swtch /
+    userret_deliver 回用户（s6 入口现承载，见 ADR-0021 增补）/
+    tick `check_callbacks(from_user)`（用户态 tick 是 QS，内核
+    tick 只机会性 raise）/ rcu_read_unlock 末读者补报（deferred
+    QS）/ **scheduler() 与 sched_drive() 空转 note_idle**——
+    全系统 parked 时 GP 不滞死（Linux idle QS 镜像；m3 套件
+    liveness 依赖）。RCU_SOFTIRQ=6（2.6.39.4 RCU=9，压缩表紧随
+    TASKLET=5，NR=7）。
+  - 读端契约（audit 而非强制）：rcu_read_lock/unlock（myproc 非
+    空则 per-proc `rcu_read_nesting` 记账）+ `rcu_deref!`/
+    `rcu_assign!`（Acquire/Release）；sleep/wq_sleep
+    debug_assert 临界区内不可睡眠；与 stock TINY_RCU 分歧：TINY
+    依赖 UP 读者不会被换出，我们仍对**任意 parked 读者**抑制
+    QS——违规 park 只延迟回收不 UAF；无 expedited/优先级。
+  - 同步服务：synchronize_rcu == rcu_barrier（栈上 SyncDone 标记
+    + call_rcu + RCU_WAITQ wq_sleep；禁止持 ptable 调用）。
+  - m3 消费者 3 例（s7b，m3 19→**22**，runner spec 同步）：
+    basic_grace（drain 开 GP→kthread 退出 swtch 真实 QS→FIFO
+    4 回调；synchronize_rcu 严格晚一个 GP）；reader_defer（GP
+    开后读者 park：swtch QS 被抑制、块 magic 跨 park 存活、
+    unlock 补报释放）；gen_swap_pressure（8 代交换 + parked
+    读者持旧代跨交换、kmalloc/kmfree 账户经 rcu_barrier 清零、
+    barrier 睡者走通 idle-QS liveness 链）。`drive_rcu` 手工播放
+    irq_exit/ksoftirqd 交错（drive+drain 轮次）；irq-exit 提前
+    drain 与 unlock-QS 窗口使相邻 retire 合并——GP 数是调度依赖
+    （锚定 invocations 而非 GP 数），自由滞后只查上界。
+- 调试期真实缺陷（两项，均已修复）：
+  1. m3 用例在 PTABLE_LOCK 守卫内调 kthread_reap（其自身取
+    ptable）→ 自死锁；改作用域先查 ZOMBIE 再放手 reap。
+  2. SLUB 对象误用页级 kfree（frame.rs bad-page panic）→
+    kmalloc/kmfree 成对。
+- 状态：已接受（host 79+72+5=156；m3 22/22；QEMU 电池 6 目标
+  PASS ×2 字节稳定：m0r/m1r-suite/m1r-user 串口不变，m1r-fault
+  `855f856a…9080`、m2 `d376e5b4…d019`（镜像移位）、m3
+  `e7b5a2fc…1b1e`（+3 例）重钉）。
 
 ## B. 风险登记册
 
