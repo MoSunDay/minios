@@ -29,7 +29,7 @@
 | 文档 | 内容 |
 |------|------|
 | [STATUS.md](STATUS.md) | Core/Parity rollup、里程碑状态与实施依赖 |
-| [STATUS-history/](STATUS-history/) | 已判绿里程碑（M0R–M2）过程记录归档 |
+| [STATUS-history/](STATUS-history/) | 已判绿里程碑（M0R–M3）过程记录归档 |
 | [00-scope-linux26.md](00-scope-linux26.md) | Linux 2.6.39.4 基线、Core/Parity 范围矩阵 |
 | [01-current-state-audit.md](01-current-state-audit.md) | xv6 与原 i686 实现的历史审计 |
 | [02-architecture.md](02-architecture.md) | x86_64 架构、目录边界与 Rust 约束 |
