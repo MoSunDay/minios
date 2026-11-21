@@ -163,3 +163,23 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   改变启动空闲页水位行）。**不变（强证据）**：m0r/m1r-suite/m1r-user/m3
   serial 与 s2a 逐字节一致——尤其 m1r-user serial `da87aa63…f6f6` 意味着
   胶水路径在 45 用例全电池上与 legacy namei 行为字节等价。
+
+### m4r-s2b-2（fd 表补全：dup2/fcntl/F_SETFD/close-on-exec，2026-11-21）
+
+- 交付（计划 23-vfs-block「每任务 fd 表支持 dup/dup2/fcntl/close-on-exec」）：
+  - abi：`SYS_DUP2=33`/`SYS_FCNTL=72`（asm-generic x86-64）、`F_GETFD=1`/
+    `F_SETFD=2`/`FD_CLOEXEC=1`；
+  - proc：`ofile_flags: [u8; NOFILE]` 每任务 fd 标志位（allocproc/freeproc
+    清零、fork 继承、close 清除——POSIX close(2) 语义）；
+  - sysfile：`sys_dup2`（Linux 语义：oldfd==newfd 仅校验原样返回、目标被占
+    先 close、新 fd CLOEXEC 清零）、`sys_fcntl`（F_GETFD 返回 /
+    F_SETFD 掩码置位、其余 cmd → EINVAL——M4 Core 面，F_GETFL/F_SETFL 随
+    文件标志位工作增量）；
+  - sys_execve 成功提交点（exec_elf Ok 后）关闭全部 FD_CLOEXEC fd（POSIX
+    exec 语义；fileclose 在进程上下文、锁已释放）；
+  - dispatch 两臂 + user/src/sys.rs dup2/fcntl 包装。
+- gate：make all 0 警告 / fmt / check-rust-only files=180 / test-host 176；
+  QEMU 电池 7 目标全 PASS。**钉值零漂移**：9 项 serial/root 与 m4r-s2b
+  逐字节一致（m1r-fault serial 与 m2 serial 未随内核 ELF/内存布局移动：
+  故障 RIP 为符号相对偏移且新增代码未改变相关布局，水位行不受 bss 增量
+  影响）——纯增量提交的理想形态。

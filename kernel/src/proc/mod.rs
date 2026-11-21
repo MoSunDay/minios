@@ -108,6 +108,9 @@ pub struct Proc {
     pub fpu: FpuArea,
     /// Open files (xv6 proc.h ofile; fd == index; null == closed).
     pub ofile: [*mut crate::fs::file_table::File; NOFILE],
+    /// Per-fd close-on-exec flag (0 or FD_CLOEXEC, m4r-s2b); meaningful
+    /// only while the matching ofile slot is non-null (close clears it).
+    pub ofile_flags: [u8; NOFILE],
     /// Current directory (xv6 proc.h cwd); set by userinit/chdir.
     pub cwd: *mut crate::fs::xv6fs::inode::Inode,
     /// m4r-s2b: the dcache shadow of `cwd` (dentry ref; walks start
@@ -150,6 +153,7 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
         xstate: 0,
         fpu: FpuArea([0; 512]),
         ofile: [core::ptr::null_mut(); NOFILE],
+        ofile_flags: [0; NOFILE],
         cwd: core::ptr::null_mut(),
         cwd_d: core::ptr::null_mut(),
         name: [0; 16],

@@ -14,7 +14,7 @@ use super::sysarg::SyscallArgs;
 use super::traps::Trapframe;
 use super::{sysfile, syspath};
 
-pub use abi::{ECHILD, EINTR, EINVAL, ENOENT, ENOMEM, ENOSYS, ESRCH};
+pub use abi::{ECHILD, EINTR, EINVAL, ENOENT, ENOMEM, ENOSYS, ESRCH, SYS_DUP2, SYS_FCNTL};
 pub use proc::on_tick;
 
 /// Linux x86-64 syscall numbers (abi crate re-export for dispatch match).
@@ -37,6 +37,8 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
         SYS_OPEN => syspath::sys_open(a.arg_usize(0), a.arg64(1)),
         SYS_CLOSE => sysfile::sys_close(a.arg_usize(0)),
         SYS_DUP => sysfile::sys_dup(a.arg_usize(0)),
+        SYS_DUP2 => sysfile::sys_dup2(a.arg_usize(0), a.arg_usize(1)),
+        SYS_FCNTL => sysfile::sys_fcntl(a.arg_usize(0), a.arg64(1), a.arg64(2)),
         SYS_PIPE => sysfile::sys_pipe(a.arg_usize(0)),
         SYS_FSTAT => sysfile::sys_fstat(a.arg_usize(0), a.arg_usize(1)),
         SYS_MKNOD => syspath::sys_mknod(a.arg_usize(0), a.arg64(1), a.arg64(2)),

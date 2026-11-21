@@ -73,6 +73,7 @@ pub unsafe fn allocproc() -> *mut Proc {
         (*p).cwd_d = null_mut();
         for fd in 0..(*p).ofile.len() {
             (*p).ofile[fd] = null_mut();
+            (*p).ofile_flags[fd] = 0;
         }
         (*p).name = [0; 16];
         (*p).mm = None;
@@ -115,6 +116,7 @@ pub unsafe fn freeproc(p: *mut Proc) {
     // Files/cwd were closed by exit(); clear the slots for reuse.
     for fd in 0..(*p).ofile.len() {
         (*p).ofile[fd] = null_mut();
+        (*p).ofile_flags[fd] = 0;
     }
     (*p).cwd = null_mut();
     (*p).cwd_d = null_mut();
@@ -312,6 +314,7 @@ pub fn fork() -> i32 {
         for fd in 0..(*me).ofile.len() {
             if !(*me).ofile[fd].is_null() {
                 (*np).ofile[fd] = crate::fs::file_table::filedup((*me).ofile[fd]);
+                (*np).ofile_flags[fd] = (*me).ofile_flags[fd];
             }
         }
         // Linux fork semantics: the child inherits the scheduling class

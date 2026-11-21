@@ -123,7 +123,22 @@ pub(super) fn sys_execve(tf: &mut Trapframe, path: usize, argv: usize) -> i64 {
     // returns with the image either replaced or the caller's kept.
     let r = unsafe { crate::proc::exec::exec_elf(p, tf, &read, fsize, &args[..nargs]) };
     unsafe { crate::fs::xv6fs::inode::iunlockput(ip) };
-    r.map_or_else(|e| e, |()| 0)
+    match r {
+        Err(e) => e,
+        // POSIX exec success point (m4r-s2b): descriptors marked
+        // FD_CLOEXEC close now; the new image sees the survivors.
+        Ok(()) => unsafe {
+            for fd in 0..(*p).ofile.len() {
+                if (*p).ofile_flags[fd] as u64 & abi::FD_CLOEXEC != 0 {
+                    let f = (*p).ofile[fd];
+                    (*p).ofile[fd] = core::ptr::null_mut();
+                    (*p).ofile_flags[fd] = 0;
+                    crate::fs::file_table::fileclose(f);
+                }
+            }
+            0
+        },
+    }
 }
 
 /// Timer hook (S3 bookkeeping); sleep wakeups live in time::tick.

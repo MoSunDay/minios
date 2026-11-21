@@ -114,6 +114,7 @@ pub fn sys_close(fd: usize) -> i64 {
         }
         let f = (*p).ofile[fd];
         (*p).ofile[fd] = core::ptr::null_mut();
+        (*p).ofile_flags[fd] = 0; // POSIX close(2) clears FD_CLOEXEC
         fileclose(f);
     }
     0
@@ -134,6 +135,58 @@ pub fn sys_dup(fd: usize) -> i64 {
             return EMFILE;
         }
         nfd as i64
+    }
+}
+
+/// dup2(2) (m4r-s2b, Linux semantics): install `oldfd`'s file at
+/// `newfd`, closing whatever holds it first. `oldfd == newfd` tests
+/// validity and returns newfd untouched (no close-reopen race). The
+/// new descriptor starts with FD_CLOEXEC clear (POSIX dup2).
+pub fn sys_dup2(oldfd: usize, newfd: usize) -> i64 {
+    let f = match fd_file(oldfd) {
+        Some(f) => f,
+        None => return EBADF,
+    };
+    if newfd >= NOFILE {
+        return EBADF;
+    }
+    if newfd == oldfd {
+        return newfd as i64;
+    }
+    // SAFETY: slot ownership moves between fds; filedup balances the
+    // new ref before any failure point, close_new only on success.
+    unsafe {
+        let p = myproc();
+        if !(*p).ofile[newfd].is_null() {
+            let old = (*p).ofile[newfd];
+            (*p).ofile[newfd] = core::ptr::null_mut();
+            (*p).ofile_flags[newfd] = 0;
+            fileclose(old);
+        }
+        (*p).ofile[newfd] = filedup(f);
+        (*p).ofile_flags[newfd] = 0;
+        newfd as i64
+    }
+}
+
+/// fcntl(2) fd-flag subset (m4r-s2b): F_GETFD/F_SETFD over the
+/// per-fd close-on-exec bit. Other commands are EINVAL (the M4 Core
+/// surface; F_GETFL/F_SETFL arrive with the file-flags work).
+pub fn sys_fcntl(fd: usize, cmd: u64, arg: u64) -> i64 {
+    // SAFETY: fd slot reads under the caller's process context.
+    unsafe {
+        let p = myproc();
+        if fd >= NOFILE || (*p).ofile[fd].is_null() {
+            return EBADF;
+        }
+        match cmd {
+            c if c == abi::F_GETFD => ((*p).ofile_flags[fd] as u64 & abi::FD_CLOEXEC) as i64,
+            c if c == abi::F_SETFD => {
+                (*p).ofile_flags[fd] = (arg & abi::FD_CLOEXEC) as u8;
+                0
+            }
+            _ => EINVAL,
+        }
     }
 }
 

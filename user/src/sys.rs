@@ -240,6 +240,15 @@ pub fn dup(fd: i32) -> Result<i64, i64> {
     call6(abi::SYS_DUP, fd as u64, 0, 0, 0, 0, 0)
 }
 
+pub fn dup2(oldfd: i32, newfd: i32) -> Result<i64, i64> {
+    call6(abi::SYS_DUP2, oldfd as u64, newfd as u64, 0, 0, 0, 0)
+}
+
+/// fcntl(2): F_GETFD/F_SETFD (the M4 Core fd-flag subset).
+pub fn fcntl(fd: i32, cmd: u64, arg: u64) -> Result<i64, i64> {
+    call6(abi::SYS_FCNTL, fd as u64, cmd, arg, 0, 0, 0)
+}
+
 /// pipe(fds): fds[0] = read end, fds[1] = write end.
 pub fn pipe(fds: &mut [i32; 2]) -> Result<i64, i64> {
     // SAFETY: kernel writes 8 bytes through fds.

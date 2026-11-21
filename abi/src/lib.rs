@@ -20,6 +20,8 @@ pub const SYS_FORK: u64 = 57;
 pub const SYS_EXIT: u64 = 60;
 pub const SYS_FSTAT: u64 = 5;
 pub const SYS_DUP: u64 = 32;
+pub const SYS_DUP2: u64 = 33;
+pub const SYS_FCNTL: u64 = 72;
 pub const SYS_MKDIR: u64 = 83;
 pub const SYS_CHDIR: u64 = 80;
 pub const SYS_LINK: u64 = 86;
@@ -101,6 +103,12 @@ pub const O_RDONLY: u64 = 0o0;
 pub const O_WRONLY: u64 = 0o1;
 pub const O_RDWR: u64 = 0o2;
 pub const O_CREAT: u64 = 0o100;
+
+/// fcntl(2) fd-flag commands (asm-generic F_*): the M4 Core subset.
+pub const F_GETFD: u64 = 1;
+pub const F_SETFD: u64 = 2;
+/// The only fd flag: close-on-exec (m4r-s2b).
+pub const FD_CLOEXEC: u64 = 1;
 pub const O_EXCL: u64 = 0o200;
 pub const O_TRUNC: u64 = 0o1000;
 pub const O_APPEND: u64 = 0o2000;
