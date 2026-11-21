@@ -59,3 +59,33 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   上轮遗留观察闭环）。
 - 纯文档变更，零代码风险；本树复验 make all / fmt-check / check-rust-only /
   host 电池与 m3r-s7d 树一致。
+
+### m4r-s1（VFS 纯核：四 ops vtable + dcache/icache + namei 纯逻辑，2026-11-21）
+
+- 交付：`fs/vfs/{mod,ops,dentry,dcache,devict,icache,namei}.rs`（7 文件全部
+  ≤400 行，纯核零内核依赖，host include-by-path 直测）：
+  - **ops.rs**：四 ops vtable（SuperOps/InodeOps/FileOps/AddressSpaceOps，
+    struct+fn 指针，无 class）+ SuperBlock/InodeCommon/FileCommon 公共头
+    （fs 私有尾经 offset 回收，RcuHead container_of 同纪律）；M4 Core
+    FileOps 最小集冻结（23 §1：AIO/sendfile/inotify 为 M10 禁入）。
+  - **dentry/dcache/devict**：dentry 树（sibling hlist + d_first_child 分离，
+    Linux d_subdirs 同构）、负 dentry（缓存/原位转正/淘汰计数）、rename 失效
+    （占位者摘链 + 空闲子树回收 + 引用者存活语义）、ref/LRU 不变量
+    （d_ref==0 ⇔ 在 LRU，d_on_lru 显式）、叶序 prune、池耗尽自动回收。
+  - **icache**：(dev,ino) 哈希 + idle LRU + prune-dispose 回调（内核侧接
+    fs destroy_inode）。
+  - **namei**：PathCursor 组件切分（多斜杠折叠/尾部斜杠/NAME_MAX）、
+    dac_allows（owner/group/other + root 特例：exec 需至少一个 x 位）、
+    may_search（目录 + x 位）、SymlinkBudget（ELOOP@40，Linux 值）。
+- host vfstests+dcachetests 17 例（路径切分/DAC 矩阵/ELOOP/负 dentry 生命
+  周期/rename 三态/replace 占位者/LRU 叶序/池回收/icache iget-iput-prune/
+  vtable 分发+泛型 DAC 回退）；host 电池 156→173（96+72+5）。
+- 修真实缺陷 1 项：d_next 同字段复用「兄弟链/首孩子头」致树环（host
+  钉死后拆 d_first_child，Linux d_subdirs 同构）。
+- gate：make all 0 警告 / fmt-check / check-rust-only（files=172）绿；
+  QEMU 电池 6 目标 ×2 全 PASS 且 serial/root 钉值与 m3 收口完全一致
+  （m0r `028048dd…`、m1r-suite `6137aefd…`/`341ae68a…`、m1r-user
+  `da87aa63…`/`45cf8a2b…`、m1r-fault `855f856a…`/`f702cdf2…`、m2
+  `d376e5b4…`、m3 `e7b5a2fc…`）——纯核经 LTO 消除，无镜像移位，零重钉。
+- dcache 锁层次（UP：DENTRY_LOCK 与 PTABLE/RCU_LOCK 关系）为 ADR-0023
+  素材，s2 落账；负 dentry 淘汰经 call_rcu 由 s2 胶水包（首个内核消费者）。

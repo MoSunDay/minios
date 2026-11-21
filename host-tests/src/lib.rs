@@ -35,6 +35,8 @@ pub mod string;
 pub mod sysarg;
 #[path = "../../kernel/src/kernel/tf_layout.rs"]
 pub mod tf_layout;
+#[path = "../../kernel/src/fs/vfs/mod.rs"]
+pub mod vfs;
 #[path = "../../kernel/src/mm/vma.rs"]
 pub mod vma;
 #[path = "../../kernel/src/proc/waitqueue.rs"]
@@ -106,6 +108,8 @@ pub mod arch {
 pub mod time;
 
 #[cfg(test)]
+mod dcachetests;
+#[cfg(test)]
 mod m2tests;
 #[cfg(test)]
 mod m3tests;
@@ -121,6 +125,8 @@ mod sigtests;
 mod tests;
 #[cfg(test)]
 mod timetests;
+#[cfg(test)]
+mod vfstests;
 #[cfg(test)]
 mod vmatests;
 #[cfg(test)]
