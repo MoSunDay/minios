@@ -224,12 +224,15 @@ unsafe fn walk_locked(mut cur: *mut Dentry, path: &[u8]) -> VfsResult<*mut Dentr
             };
             // Search gate: intermediate holders must be directories
             // the cred may cross (modes are rwxrwxrwx here, so only
-            // the NotDir shape can ever fire). Every failure below
-            // releases `cur` — a leaked pin would strand the dentry
-            // (and its wrapper's inode-table slot) forever.
-            if may_search(&*(*cur).inode(), &Cred::ROOT).is_err() {
+            // the NotDir shape can ever fire — propagate it verbatim:
+            // errno_of folds NotDir to ENOENT, the legacy walker's
+            // plain-miss spelling, and the m4suite walk cases pin the
+            // pre-fold ENOTDIR). Every failure below releases `cur` —
+            // a leaked pin would strand the dentry (and its wrapper's
+            // inode-table slot) forever.
+            if let Err(e) = may_search(&*(*cur).inode(), &Cred::ROOT) {
                 dc().dput(cur);
-                return Err(VfsErr::Access);
+                return Err(e);
             }
             let parent = cur;
             if comp == b"." {

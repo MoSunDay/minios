@@ -46,12 +46,15 @@ enum BootMode {
     M1rFault,
     M2Suite,
     M3Suite,
+    M4Suite,
     Full,
 }
 
 fn boot_mode(mbi_phys: usize) -> BootMode {
     let cmd = cmdline(mbi_phys);
-    if cmd.contains("m3-suite") {
+    if cmd.contains("m4-suite") {
+        BootMode::M4Suite
+    } else if cmd.contains("m3-suite") {
         BootMode::M3Suite
     } else if cmd.contains("m2-suite") {
         BootMode::M2Suite
@@ -109,6 +112,13 @@ fn m1r_boot(mode: BootMode, multiboot_magic: u32, mbi_phys: usize) {
         // M3 kernel-mode suite: CFS + RT policy (no root disk).
         BootMode::M3Suite => {
             kernel::m3suite::run();
+        }
+        // M4 kernel-mode suite: VFS glue semantics on the real root
+        // image (boot-context disk I/O via the polling IDE path).
+        BootMode::M4Suite => {
+            ksymtab::set_active_suite("m4");
+            init_m1r_fs();
+            kernel::m4suite::run();
         }
         // User-mode suite (S4e-2): the xv6 usertests port as pid 1.
         BootMode::M1rUser => {

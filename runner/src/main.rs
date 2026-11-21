@@ -34,6 +34,7 @@ fn main() {
         Some("run-m1r-fault") => cmd_run_suite(Suite::M1rFault, "run-m1r-fault", &args[1..]),
         Some("run-m2-suite") => cmd_run_suite(Suite::M2Suite, "run-m2-suite", &args[1..]),
         Some("run-m3-suite") => cmd_run_suite(Suite::M3Suite, "run-m3-suite", &args[1..]),
+        Some("run-m4-suite") => cmd_run_suite(Suite::M4Suite, "run-m4-suite", &args[1..]),
         Some("coverage") => cmd_coverage(&args[1..]),
         Some("check-rust-only") => rustonly::cmd(&args[1..]),
         Some("demo-full") => demo::cmd_demo_full(&args[1..]),
@@ -48,6 +49,7 @@ fn main() {
                  \x20 run-m1r-fault --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m2-suite --iso <iso> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 run-m3-suite --iso <iso> [--deadline-secs N] [--work-dir DIR]\n\
+                 \x20 run-m4-suite --iso <iso> --root <root.raw> [--deadline-secs N] [--work-dir DIR]\n\
                  \x20 coverage --manifest <coverage.toml> --serial <serial.log> --suite m1r-user\n\
                  \x20           --run <run-id> --config <CONFIG-ID> --milestone <MxR>\n\
                  \x20 demo-full --iso <iso> --root <root.raw> --work-dir DIR"
@@ -137,6 +139,7 @@ enum Suite {
     M1rFault,
     M2Suite,
     M3Suite,
+    M4Suite,
 }
 
 impl Suite {
@@ -158,6 +161,7 @@ impl Suite {
             Suite::M1rFault => "m1r-fault",
             Suite::M2Suite => "m2",
             Suite::M3Suite => "m3",
+            Suite::M4Suite => "m4",
         }
     }
 }
@@ -332,6 +336,7 @@ fn cmd_run_suite(suite: Suite, cmd: &str, args: &[String]) -> i32 {
             .map(|_| verdict::EXPECTED_FAULT_EXIT_CODE),
         Suite::M2Suite => verdict::judge(&verdict::m2_suite_spec(), &outcome).map(|_| 33),
         Suite::M3Suite => verdict::judge(&verdict::m3_suite_spec(), &outcome).map(|_| 33),
+        Suite::M4Suite => verdict::judge(&verdict::m4_suite_spec(), &outcome).map(|_| 33),
     };
     match judged {
         Ok(expected_exit) => {

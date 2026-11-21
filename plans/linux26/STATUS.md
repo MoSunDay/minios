@@ -183,3 +183,52 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   逐字节一致（m1r-fault serial 与 m2 serial 未随内核 ELF/内存布局移动：
   故障 RIP 为符号相对偏移且新增代码未改变相关布局，水位行不受 bss 增量
   影响）——纯增量提交的理想形态。
+
+### m4r-s2c（M4 内核态套件脚手架：m4suite + runner 变体 + test-qemu-m4 + walk gate 修正，2026-11-21）
+
+- 交付（计划 20-roadmap M4 s2c；ADR-0023 补档）：
+  - kernel：`kernel/src/kernel/m4suite/{mod,vfs,fsops}.rs`（108/97/161 行）——
+    boot 上下文套件，run 入口 `io::sti()` 后跑 9 例合并判决，exit
+    0x10/0x11；共享 `drained_slots()`（zombie 排干后读 free_slots——
+    unlink 族延迟末次 iput，台账只在排干后结算）与 `with_inode()`
+    （探测后必还引用，测试自身不钉槽位）；
+  - wave-1 用例（绝对路径 / m4 前缀 ≤DIRSIZ / 每例自清理 + 台账钉）：
+    namei 4——`root_paths`（"/", "/.", "/..", "/../.." 全 ROOTINO）、
+    `dirsiz_trunc`（15 字符拼写↔14 前缀互认=skipelem 截断、13 前缀
+    NoEnt）、`negative_flip`（miss→create→hit→unlink→miss 台账平）、
+    `file_as_parent`（file 中段 NotDir，namei 与 create 双 Err）；fsops
+    5——`create_eexist`（dir 重建 + file-over-dir 双 EEXIST + 失败路径
+    free_slots 不变=s2b EEXIST 泄漏钉）、`dir_dots`（. 自指 / .. 归根）、
+    `link_two_names`（同 inum、删一存一、末删 zombie 排干台账回基线）、
+    `unlink_notempty`（NotEmpty + dirlookup 引用已回还钉）、
+    `table_pressure`（80 文件>NINODE=50 全 Ok 全删台账回基线=
+    createdelete 回归类）；
+  - main.rs：BootMode::M4Suite（cmdline `m4-suite`，置于 Full fallback
+    前）——set_active_suite("m4") → init_m1r_fs()（真盘）→ m4suite::run()；
+  - runner：Suite::M4Suite（needs_root=true 走 M1R 盘套件路径、
+    CONFIG_ID_M1R）、`run-m4-suite` verb + usage、`verdict/m4.rs` spec
+    （9 例冻结表 + 5 个红绿自测）；
+  - Makefile：M4_SUITE_{CFG,DIR,ISO,RUN}、`m4-suite-iso`（make-m1r-iso
+    宏）、`test-qemu-m4`（ROOT_TEMPLATE 拷贝 + --root + sha256sum）、
+    .PHONY；`scripts/m4-suite-grub.cfg`。
+- **真实缺陷（首跑钉出，已修）**：walk_locked 搜索 gate 把 may_search 的
+  NotDir 改写为 Access（s2b 遗留）——syscall 边缘对 file 中段路径错报
+  EACCES 而非 legacy ENOENT 折叠，且违背 vfs_glue 模块文档「ENOTDIR
+  surfaces with the m4suite walk cases」的既定意图。修为原样传播
+  （errno_of 的 NotDir→ENOENT 折叠不变，电池字节稳定得以保持）。
+  诊断：m4.namei.file_as_parent 首跑 8/9，临时打点实证 WALK=Access /
+  MK=NotDir / 台账平，即刻定位。
+- gate：make all 0 警告 / fmt-check / check-rust-only files=180→183 /
+  test-host 176→181（99+77+5，m4 spec 自测 +5）；
+- QEMU 电池 **8 目标全 PASS**（新增 test-qemu-m4：**9/9**，serial 钉
+  `20996882f598734911efda98719af6106a88d07c2432b5366b4b089d5fd58460`）。
+- 钉值重钉（2 项，worktree bde4a5e 重建逐行 diff 归因）：m2 serial
+  `a97db394…`→`49180fd2…`（仅 2 行：zones DMA=0x872→0x870 与 directmap
+  free-frame 诊断对 0xf843/0xf84b→0xf841/0xf849——内核镜像 +2 页致启动
+  空闲页水位平移，+8 关系保持）；m1r-fault serial `cc198eaa…`→
+  `fa350131…`（全部差异行仅 `rust_main+0x1242→+0x1287` 回溯偏移与 rodata
+  页 `0x…2c000→0x…2e000`——main.rs 新增 boot 臂的代码布局效应）。
+  **不变（强证据）**：m0r/m1r-suite/m1r-user/m1r-fault-root/m1r-user-root/
+  m1r-suite-root/m3 共 7 项 serial/root 钉逐字节一致——含 gate 修正
+  （NotDir 原样传播）下 m1r-user serial 仍 `da87aa63…`，证明冻结电池
+  无任何用例走 file 中段路径，legacy 字节等价持续成立。

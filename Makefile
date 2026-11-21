@@ -24,6 +24,7 @@ M1R_USER_CFG := scripts/m1r-user-grub.cfg
 M1R_FAULT_CFG := scripts/m1r-fault-grub.cfg
 M2_SUITE_CFG := scripts/m2-suite-grub.cfg
 M3_SUITE_CFG := scripts/m3-suite-grub.cfg
+M4_SUITE_CFG := scripts/m4-suite-grub.cfg
 FULL_CFG := scripts/minios-full-grub.cfg
 ISO_DIR  := $(TARGET_DIR)/m0r-iso
 M1R_SUITE_DIR := $(TARGET_DIR)/m1r-suite-iso
@@ -31,6 +32,7 @@ M1R_USER_DIR := $(TARGET_DIR)/m1r-user-iso
 M1R_FAULT_DIR := $(TARGET_DIR)/m1r-fault-iso
 M2_SUITE_DIR := $(TARGET_DIR)/m2-suite-iso
 M3_SUITE_DIR := $(TARGET_DIR)/m3-suite-iso
+M4_SUITE_DIR := $(TARGET_DIR)/m4-suite-iso
 FULL_DIR := $(TARGET_DIR)/full-iso
 ISO      := $(ISO_DIR)/minios-m0r.iso
 M1R_SUITE_ISO := $(M1R_SUITE_DIR)/minios-m1r-suite.iso
@@ -38,6 +40,7 @@ M1R_USER_ISO := $(M1R_USER_DIR)/minios-m1r-user.iso
 M1R_FAULT_ISO := $(M1R_FAULT_DIR)/minios-m1r-fault.iso
 M2_SUITE_ISO := $(M2_SUITE_DIR)/minios-m2-suite.iso
 M3_SUITE_ISO := $(M3_SUITE_DIR)/minios-m3-suite.iso
+M4_SUITE_ISO := $(M4_SUITE_DIR)/minios-m4-suite.iso
 FULL_ISO := $(FULL_DIR)/minios-full.iso
 # M1R S3 user chain: the user crate builds through its own target dir and
 # RUSTFLAGS (rust-lld + own link script + static non-PIE ET_EXEC); these
@@ -68,13 +71,14 @@ M1R_USER_RUN := $(TARGET_DIR)/m1r-user-run
 M1R_FAULT_RUN := $(TARGET_DIR)/m1r-fault-run
 M2_SUITE_RUN := $(TARGET_DIR)/m2-suite-run
 M3_SUITE_RUN := $(TARGET_DIR)/m3-suite-run
+M4_SUITE_RUN := $(TARGET_DIR)/m4-suite-run
 FULL_RUN := $(TARGET_DIR)/full-run
 ROOT_TEMPLATE := $(TARGET_DIR)/root-template.raw
 GRUB_MODULES := biosdisk iso9660 multiboot normal configfile terminal serial echo boot search memdisk
 
 .PHONY: all build user-build check-user-elf check-layout check-rust-only m0r-iso m1r-iso m1r-user-iso \
-        m1r-fault-iso m2-suite-iso m3-suite-iso full-iso test-qemu-smoke run-smoke test-qemu \
-        test-qemu-user test-expected-fault test-qemu-m2 test-qemu-m3 demo-full test test-host \
+        m1r-fault-iso m2-suite-iso m3-suite-iso m4-suite-iso full-iso test-qemu-smoke run-smoke test-qemu \
+        test-qemu-user test-expected-fault test-qemu-m2 test-qemu-m3 test-qemu-m4 demo-full test test-host \
         fmt fmt-check clean
 
 all: build check-user-elf check-layout
@@ -155,6 +159,11 @@ m2-suite-iso: build
 m3-suite-iso: build
 	$(call make-m1r-iso,$(M3_SUITE_DIR),$(M3_SUITE_CFG),$(M3_SUITE_ISO))
 
+# M4 kernel-mode suite ISO (CORE-UP-GRUB argv; the runner attaches
+# the root disk).
+m4-suite-iso: build
+	$(call make-m1r-iso,$(M4_SUITE_DIR),$(M4_SUITE_CFG),$(M4_SUITE_ISO))
+
 # BootMode::Full ISO variant (cmdline `full`: /init -> sh on serial).
 full-iso: build
 	$(call make-m1r-iso,$(FULL_DIR),$(FULL_CFG),$(FULL_ISO))
@@ -222,6 +231,15 @@ test-qemu-m3: m3-suite-iso
 	@mkdir -p $(M3_SUITE_RUN)
 	$(RUNNER) run-m3-suite --iso $(M3_SUITE_ISO) --work-dir $(M3_SUITE_RUN)
 	@sha256sum $(M3_SUITE_RUN)/serial.log
+
+# M4 kernel-mode suite: VFS glue semantics against a fresh copy of
+# the root disk (boot-context disk I/O; runner judges the m4 verdict).
+test-qemu-m4: m4-suite-iso $(ROOT_TEMPLATE)
+	@rm -rf $(M4_SUITE_RUN)
+	@mkdir -p $(M4_SUITE_RUN)
+	@cp $(ROOT_TEMPLATE) $(M4_SUITE_RUN)/root.raw
+	$(RUNNER) run-m4-suite --iso $(M4_SUITE_ISO) --root $(M4_SUITE_RUN)/root.raw --work-dir $(M4_SUITE_RUN)
+	@sha256sum $(M4_SUITE_RUN)/serial.log
 
 # Interactive full-boot demo (BootMode::Full): the runner attaches the
 # root drive, drives sh over `-serial stdio` (echo/ls/CTRL-D) and judges

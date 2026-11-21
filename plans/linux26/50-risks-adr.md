@@ -413,6 +413,51 @@
   `855f856a…9080`、m2 `d376e5b4…d019`（镜像移位）、m3
   `e7b5a2fc…1b1e`（+3 例）重钉）。
 
+### ADR-0023 M4 s2（UP）：VFS 内核胶水——wrapper/dcache/inode 表引用契约、zombie/RCU 延迟回收与锁序
+
+- 背景：23（VFS/block）——M4 把 s1 纯核心（dcache/icache/namei，host
+  17 例）落进内核：dcache 池、根挂载、walk、create/unlink/link 三段式
+  （DENTRY_LOCK 下解析钉住 → 放锁跑可睡眠 fs 事务 → 重新加锁一致化）。
+- 结构（vfs_glue 五文件，均 ≤400 行；mod/mutate/xv6_adapt/xv6_obj/wrapper）：
+  - **wrapper 1:1 dentry**：xv6fs legacy inode cache 的生命周期对 VFS 层
+    不可观测，故每名字包装器持一个 iget 引用（InodeCommon 头 + xv6_ip），
+    这是 M4 对 50 槽 inode 表的唯一诚实绑定；s1 Icache 本里程碑不消费
+    （tmpfs s6 才是首个消费者）。
+  - **引用契约**：`kern_namei_d` 返回 (idup 过的 ip, pinned d)——引用停靠
+    proc.cwd，由 exit 的 iput 配平；`kern_namei` 直通返回（**双 idup
+    教训**：s2b 曾再 idup 一次，每次成功 lookup 净 +1，m1r-user
+    createdelete 45 文件恰耗尽 50 槽表）。Err 路径纪律：create_common
+    EEXIST 与 xv6_unlink NotEmpty 的 dirlookup 引用必须纯 `iput` 回还
+    （ilock/iunlock 已闭合时禁 iunlockput）。
+  - **表压力回收**：wrapper 的 iget 引用即槽位占用，idle dentry 的 LRU
+    prune（dispose→release_wrapper→iput）是 256 槽 dcache 对 50 槽 inode
+    表的泄压阀：`relieve_inode_pressure(need)` 在锁外、每个可能 iget/
+    ialloc 的 fs 调用前执行。
+  - **zombie**：unlink 使 wrapper 释放时若 nlink==0，末次 iput 可能
+    truncate+sleep，排入 zombie 队列由每个 kern_* mutation 入口
+    `reclaim_zombies`（事务内 iput）排干；m4suite 的台账钉以
+    drained_slots（drain 后 free_slots）为唯一读数。
+  - **RCU 延迟回收**：dentry detach 走 retire_enqueue→call_rcu，宽限期
+    后回 dentry free list（RETIRE_BUSY 期间直接 recycle 保正确性）。
+  - **锁序（钉死）**：DENTRY_LOCK → xv6 ICACHE_LOCK（叶）；
+    DENTRY_LOCK → RCU_LOCK（call_rcu 入队）；RCU 回调锁外运行、重新取
+    DENTRY_LOCK，无倒置。持 DENTRY_LOCK 下唯一合法 dput 拼法
+    `dc().dput(d)`，锁外 `dput_unlocked`。
+  - **walk gate 错误传播（s2c 修正）**：中段组件过非目录时
+    may_search 返回 NotDir，walk 原样传播；errno_of 把 NotDir 折叠为
+    ENOENT（legacy 平凡 miss 拼法，保电池字节稳定），m4suite 在 VfsErr
+    层钉 ENOTDIR。s2b 曾把 gate 失败一律改写 Access（syscall 边缘错报
+    EACCES，违背折叠意图），m4.namei.file_as_parent 用例首跑即钉出，
+    已修为原样传播。
+  - **m4suite（s2c）**：boot 上下文内核态套件（无 proc cwd → 只用绝对
+    路径；iderw 轮询可做盘 I/O），m4 前缀 / 级名字（≤DIRSIZ）、每例自
+    清理 + free_slots 台账钉（s2b 两处泄漏修复的回归类）。9 例：
+    namei 4（root_paths/dirsiz_trunc/negative_flip/file_as_parent）+
+    fsops 5（create_eexist/dir_dots/link_two_names/unlink_notempty/
+    table_pressure 80>NINODE）。
+- 状态：已接受（s2c 时点：host 181、m4 9/9、电池 8 目标 PASS；
+  m1r-user serial 与 legacy 字节等价钉持续成立）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

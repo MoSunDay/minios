@@ -10,6 +10,7 @@ pub mod m2map;
 pub mod m2mem;
 pub mod m2suite;
 pub mod m3suite;
+pub mod m4suite;
 pub mod oops;
 pub mod rcu;
 pub mod rcu_engine;
