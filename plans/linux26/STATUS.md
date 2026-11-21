@@ -89,3 +89,28 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   `d376e5b4…`、m3 `e7b5a2fc…`）——纯核经 LTO 消除，无镜像移位，零重钉。
 - dcache 锁层次（UP：DENTRY_LOCK 与 PTABLE/RCU_LOCK 关系）为 ADR-0023
   素材，s2 落账；负 dentry 淘汰经 call_rcu 由 s2 胶水包（首个内核消费者）。
+
+### m4r-s2a（syscall.rs 四分拆：dispatch/mm/proc/time，2026-11-21）
+
+- 交付：`kernel/src/kernel/syscall.rs`（569 行）→ `kernel/src/kernel/syscall/
+  {mod,mm,proc,time}.rs`（95/100/244/141 行，全 ≤400），**纯代码搬运**（排序
+  行多重集 diff 证明仅路径前缀/可见性/import 拆分/`super::signal`→
+  `crate::kernel::signal` 四类接线差异，逻辑零改动）：
+  - **mod.rs**：`dispatch()` 分发表 + errno `pub use` 面 + SYS_* 引入 +
+    `pub use proc::on_tick`（time/mod.rs 既有 `super::syscall::on_tick`
+    调用点保持不动）；callee 改 `mm::`/`proc::`/`time::` 前缀。
+  - **mm.rs**：sys_brk/sys_mmap/sys_munmap/sys_mprotect（pub(super)）。
+  - **proc.rs**：sys_getpid/sys_wait4/sys_execve/sys_sched_* 族 +
+    sys_sched_prio_bound（pub(super)）；on_tick 保 pub；sched_target/
+    sched_valid 私有。
+  - **time.rs**：sys_gettimeofday/sys_alarm/sys_nanosleep（pub(super)）；
+    nanosleep_wake 私有。
+- 动机（brief 风险②预案）：s2b 新 syscall（dup2/fcntl/F_SETFD 等）落地前
+  先拆表控复杂度，file.rs/ipc.rs 随 s2b 增量加入。
+- gate：make all 0 警告 / fmt-check / check-rust-only（files=172→175）/
+  test-host 173（96+72+5）绿；QEMU 电池 6 目标全 PASS，serial/root 9 项
+  证据钉值与 m4r-s1 参考逐字节一致（m0r `028048dd…20f1`、m1r-suite
+  `6137aefd…e585`/`341ae68a…15ce`、m1r-user `da87aa63…f6f6`/
+  `45cf8a2b…f70`、m1r-fault `855f856a…808`/`f702cdf2…8ca5`、m2
+  `d376e5b4…d019`、m3 `e7b5a2fc…1b1e`）。内核 ELF 哈希随符号路径变化
+  （`767e4ae7…`→`eb323447…`，预期非钉值）。
