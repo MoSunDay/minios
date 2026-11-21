@@ -335,7 +335,7 @@ fn specs_are_frozen() {
     assert_eq!(suite.expected_cases.len(), 20);
     let user = m1r_user_spec();
     assert_eq!(user.suite, "m1r-user");
-    assert_eq!(user.expected_cases.len(), 39);
+    assert_eq!(user.expected_cases.len(), 45);
     let fault = m1r_fault_spec();
     assert_eq!(fault.suite, "m1r-fault");
     assert_eq!(fault.cases.len(), 5);

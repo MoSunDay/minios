@@ -3,6 +3,7 @@
 #![no_std]
 #![no_main]
 
+use abi::sig::SIGKILL;
 use minios_user::{args, io, sys};
 
 fn atoi(s: &[u8]) -> i32 {
@@ -33,7 +34,7 @@ extern "C" fn main(argc: i32, argv: *const *const u8) -> i32 {
     for i in 1..a.argc() {
         if let Some(p) = a.arg(i) {
             let pid = atoi(p);
-            if sys::kill(pid).is_err() {
+            if sys::kill(pid, SIGKILL).is_err() {
                 let _ = io::eprint_str("kill: exit status error\n");
                 sys::exit(1);
             }

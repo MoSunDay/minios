@@ -134,9 +134,82 @@ pub fn mprotect(addr: usize, len: usize, prot: u64) -> Result<i64, i64> {
     call6(abi::SYS_MPROTECT, addr as u64, len as u64, prot, 0, 0, 0)
 }
 
-pub fn kill(pid: i32) -> Result<i64, i64> {
-    call6(abi::SYS_KILL, pid as u64, 0, 0, 0, 0, 0)
+/// kill(2): send `sig` to `pid` (xv6 callers pass SIGKILL).
+pub fn kill(pid: i32, sig: i32) -> Result<i64, i64> {
+    // SAFETY: plain register plumbing.
+    call6(abi::SYS_KILL, pid as u64, sig as u64, 0, 0, 0, 0)
 }
+
+/// rt_sigaction(2): install (act) and/or query (old_act) one
+/// disposition. `act` = None queries only. The restorer field must
+/// point at `sigreturn_stub()` (SA_RESTORER is mandatory on x86-64).
+pub fn rt_sigaction(
+    sig: i32,
+    act: Option<&abi::sig::UserSigaction>,
+    old_act: Option<&mut abi::sig::UserSigaction>,
+) -> Result<i64, i64> {
+    // SAFETY: the kernel copyin/copyout guards the 32-byte images.
+    call6(
+        abi::SYS_RT_SIGACTION,
+        sig as u64,
+        act.map(|a| a as *const _ as u64).unwrap_or(0),
+        old_act.map(|a| a as *mut _ as u64).unwrap_or(0),
+        0,
+        0,
+        0,
+    )
+}
+
+/// rt_sigprocmask(2): SIG_BLOCK/SIG_UNBLOCK/SIG_SETMASK over the u64
+/// set; the previous mask lands in `old_set` when given.
+pub fn rt_sigprocmask(how: i64, set: Option<&u64>, old_set: Option<&mut u64>) -> Result<i64, i64> {
+    // SAFETY: the kernel guards the 8-byte set images.
+    call6(
+        abi::SYS_RT_SIGPROCMASK,
+        how as u64,
+        set.map(|s| s as *const _ as u64).unwrap_or(0),
+        old_set.map(|s| s as *mut _ as u64).unwrap_or(0),
+        8,
+        0,
+        0,
+    )
+}
+
+/// rt_sigpending(2): the pending u64 set.
+pub fn rt_sigpending(set: &mut u64) -> Result<i64, i64> {
+    // SAFETY: the kernel writes exactly 8 bytes through `set`.
+    call6(abi::SYS_RT_SIGPENDING, set as *mut _ as u64, 8, 0, 0, 0, 0)
+}
+
+/// alarm(2): deliver SIGALRM after `seconds` (0 cancels); returns the
+/// previous remaining time.
+pub fn alarm(seconds: u64) -> Result<i64, i64> {
+    // SAFETY: plain register plumbing.
+    call6(abi::SYS_ALARM, seconds, 0, 0, 0, 0, 0)
+}
+
+/// The SA_RESTORER stub address every installed action must carry:
+/// the handler `ret`s here; the stub enters rt_sigreturn(15), which
+/// restores the interrupted context from the frame below the handler
+/// rsp (never returns; ud2 is the forged-frame backstop).
+pub fn sigreturn_stub() -> u64 {
+    // Take the symbol ADDRESS (a bare `static as u64` would load the
+    // first opcode byte of the global_asm label below).
+    core::ptr::addr_of!(sigreturn_stub_addr) as u64
+}
+
+extern "C" {
+    static sigreturn_stub_addr: u8;
+}
+
+core::arch::global_asm!(
+    ".globl sigreturn_stub_addr",
+    "sigreturn_stub_addr:",
+    "  mov rax, {nr}",
+    "  syscall",
+    "  ud2",
+    nr = const abi::SYS_RT_SIGRETURN,
+);
 
 /// open(path, flags). `path` must be NUL-terminated (rt builds C strings).
 pub fn open(path: &[u8], flags: u64) -> Result<i64, i64> {

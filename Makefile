@@ -195,7 +195,7 @@ test-qemu-user: m1r-user-iso $(ROOT_TEMPLATE)
 	$(RUNNER) run-m1r-user --iso $(M1R_USER_ISO) --root $(M1R_USER_RUN)/root.raw --work-dir $(M1R_USER_RUN)
 	@sha256sum $(M1R_USER_RUN)/serial.log $(M1R_USER_RUN)/root.raw
 	$(RUNNER) coverage --manifest tests/user/coverage.toml --serial $(M1R_USER_RUN)/serial.log \
-	  --suite m1r-user --run m1r-user --config CORE-UP-GRUB-R1 --milestone M2
+	  --suite m1r-user --run m1r-user --config CORE-UP-GRUB-R1 --milestone M3
 
 # M1R expected-fault suite: dedicated log namespace + verdict (40 §2.1.6);
 # argv identical to test-qemu except the -cdrom image (construction

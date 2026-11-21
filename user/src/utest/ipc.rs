@@ -4,6 +4,7 @@
 //! wait rounds with exact pid checks).
 
 use crate::sys;
+use abi::sig::SIGKILL;
 
 /// xv6 pipe1: the child writes 5 x 1033 bytes of a byte sequence (the
 /// write end blocks on the ring until the parent drains); the parent
@@ -123,9 +124,9 @@ pub fn case_preempt() -> bool {
     let mut byte = [0u8; 1];
     let got = matches!(sys::read(fds[0], &mut byte), Ok(1)) && byte[0] == b'x';
     let _ = sys::close(fds[0]);
-    let killed = sys::kill(pid1 as i32).is_ok()
-        && sys::kill(pid2 as i32).is_ok()
-        && sys::kill(pid3 as i32).is_ok();
+    let killed = sys::kill(pid1 as i32, SIGKILL).is_ok()
+        && sys::kill(pid2 as i32, SIGKILL).is_ok()
+        && sys::kill(pid3 as i32, SIGKILL).is_ok();
     let mut reaped = true;
     for pid in [pid1 as i32, pid2 as i32, pid3 as i32] {
         if !matches!(sys::wait4(pid, core::ptr::null_mut()), Ok(p) if p == pid as i64) {

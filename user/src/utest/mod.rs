@@ -12,6 +12,7 @@ pub mod fs_names;
 pub mod ipc;
 pub mod mem;
 pub mod prog;
+pub mod signal;
 
 use crate::io;
 
@@ -65,6 +66,12 @@ const CASES: &[(&str, CaseFn)] = &[
     ("xv6.prog.zombie", prog::case_prog_zombie),
     ("xv6.prog.forktest", prog::case_prog_forktest),
     ("xv6.prog.stressfs", prog::case_prog_stressfs),
+    ("xv6.sig.roundtrip", signal::case_roundtrip),
+    ("xv6.sig.mask_defer", signal::case_mask_defer),
+    ("xv6.ipc.sigpipe", signal::case_sigpipe),
+    ("xv6.sig.except", signal::case_except),
+    ("xv6.sig.chld", signal::case_chld),
+    ("xv6.sig.alarm", signal::case_alarm),
 ];
 
 /// Run every case, printing one `CASE <id> PASS|FAIL` line each.

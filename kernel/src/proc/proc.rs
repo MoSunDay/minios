@@ -172,6 +172,15 @@ pub fn exit(status: i32) -> ! {
                 }
             }
         }
+        // SIGCHLD (21 §7): generate for the living parent before the
+        // waiters wake — a handler-bearing parent sleeping in an
+        // interruptible wait takes its sigreturn there; wait4 parents
+        // reap through the wake below regardless of disposition.
+        // SAFETY: ptable lock held (the sig_send_locked contract).
+        let par = (*p).parent;
+        if !par.is_null() {
+            crate::kernel::signal::sig_send_locked(par, crate::kernel::sigset::SIGCHLD);
+        }
         // Wake reaping parents (all waiters; ptable held).
         // SAFETY: ptable lock held; static access without a reference.
         let wq = core::ptr::addr_of_mut!(super::PTABLE_WAITQ);

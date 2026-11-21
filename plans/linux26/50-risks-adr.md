@@ -294,6 +294,66 @@
   kthread 语义绑定中断与调度上下文，QEMU m3 电池承保覆盖；
   m1r-fault/m2 串口因代码布局重钉，m1r-user 39/39 钉值字节不变）。
 
+### ADR-0021 M3 s6（UP）：Linux 式信号——sigframe/rt_sig* 契约、ERESTARTSYS orig_ax、EPIPE/SIGPIPE 与 SIGCHLD
+
+- 背景：21 §6/§7——把 xv6 的 kill/exit(-1) 语义升级为 2.6 式信号：
+  per-proc pending/blocked/64 槽 dispositions，帧式投递（handler +
+  restorer + rt_sigreturn），同步异常与 EPIPE/SIGCHLD 生成点。
+- 结构：
+  - `kernel/sigset.rs`（s6b）：NSIG=64 位图代数（sigmask/
+    first_pending/MASK_SIGKILL 纯集合语义）；SigAction {handler,
+    flags, restorer, mask}；`abi::sig`（编号/SA_*/how/32B
+    UserSigaction）与之 `const _: () = assert!` 交叉钉死（host-tests
+    零依赖，不能引 abi——编译期断言放内核侧防漂移）。
+  - Proc 增 `sig_pending/sig_blocked/sig_actions:[SigAction;64]`
+    （freeproc 清零，allocproc 不重播）；fork 继承 actions+blocked
+    不继承 pending；exec 保留 blocked+SIG_IGN、其余回 DFL、pending
+    清空；生成点规则：IGN 在生成时丢弃、阻塞挂起、DFL 终止类在
+    投递点 `exit(-256-sig)`（wstatus `(-x)&0x7f`——xv6.mem.oom 的
+    legacy `exit(-1)` 仍走 `(x&0xff)<<8` 通道）；SIGKILL 仍走
+    kill_proc（killed=1 → exit(-1)），Stop 类在 M8 前按终止处理。
+  - Sigframe 208B（retaddr+0/signum+8/magic+16/tf+24/mask+200），
+    `frame_base_for(rsp) = (rsp-344 & !0xf) + 8`（16B 对齐 + 红线
+    常量可审）；投递改写 tf（rip=handler、rsp=retaddr 栈），
+    rt_sigreturn(15) 校验 magic 后整体还原；SA_NODEFER 投递期免
+    自屏蔽、SA_RESETHAND 一次性回 DFL。
+  - 生成点三处：pipewrite 环满且 readopen==0 → 先放管道锁再
+    `sig_send(SIGPIPE)` → 返回 -EPIPE（POSIX：阻塞/忽略也照返）；
+    exit() 持 ptable 锁 `sig_send_locked(parent, SIGCHLD)` 先于
+    `wake_up_locked(PTABLE_WAITQ)`（wait4 睡眠者无论 disposition
+    都被唤醒收尸）；同步异常 fault_cur **强制越过 SIG_IGN**（IGN
+    复位为 DFL 再投递——否则缺页循环死锁），alarm 到期走 timer
+    软中断。
+  - `interrupted()` = killed || pending&!blocked：可中断睡眠
+    （管道读写、wait）被未决未阻塞信号唤醒返回 -ERESTARTSYS。
+- 调试期真实缺陷（三项，均已修复并在 m1r-user 45 例承保）：
+  1. sysfile.rs 分块 sys_read/sys_write 把负 fileread/filewrite
+     返回改写成 EIO/短读——吞掉 -512 ERESTARTSYS 与 -32 EPIPE；
+     改为 `total>0 ? total : r` 原码透传（部分传输 POSIX 短读写
+     站立、不重启）。
+  2. traps.rs ERESTARTSYS 臂写回 `tf.rax=ERESTARTSYS`，回卷的
+     `syscall` 再入以 nr=-512 分发 → ENOSYS(-38)；Linux orig_ax
+     方案：进入分发前暂存 `orig_nr=tf.rax`，重启臂恢复之。
+  3. 用户态 sigreturn_stub 以 `static as u64` 取"地址"实际加载了
+     首个操作码字节 0x48（restorer=0x48 → ifetch 缺页）；改
+     `core::ptr::addr_of!(sigreturn_stub_addr) as u64`。
+  （另两处用例侧缺陷：sigpipe 用例父进程关错端（关 fds[1] 留
+  fds[0] → readopen 永不为 0 → 子进程满环死睡 + 父进程写已关 fd
+  得 EBADF）；共享 HANDLED 计数器跨用例未清零——mask_defer 留下
+  SIGUSR2 使 sigpipe 的 alive 检查误判。）
+- 简化（对照 2.6.39.4）：单 pending 位无 RT 队列；无 sigaltstack/
+  SA_SIGINFO 四参形；rt_sigaction 不设 SA_RESTORER 时拒绝而非
+  代填（glibc 契约显式化）；同步信号内核栈内直接处置，无
+  force_sig_info 队列；SIGKILL/Stop 不受掩码语义影响的完整集在
+  M8 job control 补齐。
+- 状态：已接受（m1r-user 39→45 例：sig.roundtrip / sig.mask_defer
+  / ipc.sigpipe（默认死 wstatus&0x7f=13、阻塞/忽略存活返 -32 且
+  无 pending）/ sig.except（默认+越过 IGN）/ sig.chld / sig.alarm
+  （用户态自旋中经 IRQ 出口投递）；m3 19/19、host 75（+8 sigtests）
+  绿；m0r/m1r-suite/m1r-fault/m3 串口钉值不变，m1r-fault/m1r-suite
+  root 因用户 ELF 模板重钉，m2 串口因 vma 布局打印重钉——均 ×2
+  字节稳定）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

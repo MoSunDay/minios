@@ -110,8 +110,17 @@ pub unsafe fn pipewrite(p: *mut Pipe, src: *const u8, n: i32) -> i32 {
             }
             while (*p).nwrite == (*p).nread + PIPESIZE as u32 {
                 if (*p).readopen == 0 {
-                    // All readers gone: EPIPE (plus SIGPIPE at s6).
+                    // All readers gone: EPIPE + SIGPIPE (21 §7). The
+                    // generation happens after the pipe lock drops
+                    // (sig_send takes the ptable lock; the reverse
+                    // order never exists). Ignored SIGPIPE drops at
+                    // generation, blocked pends — either way the
+                    // writer still sees -EPIPE (POSIX).
                     (*p).lock.raw_release();
+                    let me = myproc();
+                    if !me.is_null() {
+                        crate::kernel::signal::sig_send(me, crate::kernel::sigset::SIGPIPE);
+                    }
                     return -(abi::EPIPE_ABS) as i32;
                 }
                 // doc: pipewrite going to sleep (exclusive: a reader

@@ -280,17 +280,23 @@ pub extern "C" fn syscall_dispatch(tf: &mut Trapframe) {
     if gs != core::ptr::addr_of!(cpu::PERCPU) as u64 {
         oops::kernel_fault(tf, "syscall entry with wrong kernel GS base");
     }
+    // The syscall number must survive the restart path (Linux orig_ax):
+    // `syscall` clobbers rax, so a rewound re-entry would dispatch on
+    // the old return value (-ERESTARTSYS became nr=-512 -> ENOSYS in
+    // the wild; QEMU serial -38).
+    let orig_nr = tf.rax;
     let ret = super::syscall::dispatch(tf);
     if ret == abi::ERESTARTSYS {
         // Restartable interruption (21 §3): rewind to the `syscall`
-        // insn (2 bytes) so the call re-executes once the interrupt is
-        // handled. s6: the interrupter is an unblocked signal — the
-        // delivery below runs the handler first; sigreturn resumes at
-        // the rewound insn and the call restarts cleanly. Fatal kills
+        // insn (2 bytes) and restore rax to the number so the call
+        // re-executes once the interrupt is handled. s6: the
+        // interrupter is an unblocked signal — the delivery below runs
+        // the handler first; sigreturn resumes at the rewound insn
+        // with the same frame values (rip/rax included). Fatal kills
         // still take the pre-s6 route (re-entered call answers -1,
         // exit at the next user trap).
         tf.rip -= 2;
-        tf.rax = abi::ERESTARTSYS as u64;
+        tf.rax = orig_nr;
         super::signal::userret_deliver(tf);
         return;
     }

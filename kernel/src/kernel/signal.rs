@@ -47,17 +47,23 @@ pub fn sig_send(p: *mut Proc, sig: i32) {
         return;
     }
     let _guard = PTABLE_LOCK.lock();
-    // SAFETY: ptable lock held; the slot stays pinned by the caller.
-    unsafe {
-        if (*p).state == ProcState::UNUSED {
-            return;
-        }
-        if (*p).sig_actions[(sig - 1) as usize].is_ign() {
-            return; // discarded at generation (unblocked ignores only; M3)
-        }
-        (*p).sig_pending |= sigset::sigmask(sig);
-        wake_if_sleeping(p, sig);
+    // SAFETY: the lock is held for this call.
+    unsafe { sig_send_locked(p, sig) };
+}
+
+/// # Safety
+/// PTABLE_LOCK must be held by this context (ptable-lock holders run
+/// with interrupts disabled — the kill_proc discipline).
+pub unsafe fn sig_send_locked(p: *mut Proc, sig: i32) {
+    if (*p).state == ProcState::UNUSED {
+        return;
     }
+    if (*p).sig_actions[(sig - 1) as usize].is_ign() {
+        return; // discarded at generation (unblocked ignores only; M3)
+    }
+    (*p).sig_pending |= sigset::sigmask(sig);
+    // SAFETY: ptable lock held; the slot stays pinned by the caller.
+    unsafe { wake_if_sleeping(p, sig) };
 }
 
 /// Synchronous exceptions (SIGSEGV/SIGFPE/SIGILL/SIGTRAP) must not be
@@ -101,8 +107,19 @@ unsafe fn wake_if_sleeping(p: *mut Proc, sig: i32) {
 /// proc — a null myproc (boot context) leaves the frame untouched.
 pub fn fault_cur(_tf: &mut Trapframe, sig: i32) {
     let p = myproc();
-    if !p.is_null() {
-        force_send(p, sig);
+    if p.is_null() {
+        return;
+    }
+    force_send(p, sig);
+    // Linux force_sig semantics: a synchronous exception cannot be
+    // ignored — an installed SIG_IGN would otherwise pend-and-drop at
+    // delivery while the faulting insn re-executes forever. Reset to
+    // the (fatal-by-table) default so the delivery point terminates.
+    // SAFETY: the running process.
+    unsafe {
+        if (*p).sig_actions[(sig - 1) as usize].is_ign() {
+            (*p).sig_actions[(sig - 1) as usize] = SigAction::DFL;
+        }
     }
 }
 
@@ -415,3 +432,23 @@ pub fn sys_kill(pid: i32, sig: i64) -> i64 {
     }
     0
 }
+
+/// The abi::sig constants and this module's numbers are one contract
+/// (user runtime vs kernel core); freeze them equal at compile time.
+const _: () = {
+    use ::abi::sig as a;
+    assert!(a::SIGKILL == sigset::SIGKILL);
+    assert!(a::SIGUSR1 == sigset::SIGUSR1);
+    assert!(a::SIGUSR2 == sigset::SIGUSR2);
+    assert!(a::SIGPIPE == sigset::SIGPIPE);
+    assert!(a::SIGALRM == sigset::SIGALRM);
+    assert!(a::SIGCHLD == sigset::SIGCHLD);
+    assert!(a::SIGSEGV == sigset::SIGSEGV);
+    assert!(a::SIGSTOP == sigset::SIGSTOP);
+    assert!(a::SIG_DFL == sigset::SIG_DFL);
+    assert!(a::SIG_IGN == sigset::SIG_IGN);
+    assert!(a::SA_RESTORER == sigset::SA_RESTORER);
+    assert!(a::SA_NODEFER == sigset::SA_NODEFER);
+    assert!(a::SA_RESETHAND == sigset::SA_RESETHAND);
+    assert!(a::NSIG == sigset::NSIG);
+};

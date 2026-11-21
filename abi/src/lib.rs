@@ -138,3 +138,72 @@ impl Stat {
     pub const T_FILE: i16 = 2;
     pub const T_DEV: i16 = 3;
 }
+
+/// Signal ABI (21 §6): Linux 2.6.39 x86-64 numbers, SA_* bits, the
+/// 32-byte user sigaction image, and procmask hows — the shared
+/// contract between the kernel's sigset core and the Rust user
+/// runtime's rt_sig* wrappers. The kernel cross-asserts these against
+/// kernel::sigset at compile time (no silent drift).
+pub mod sig {
+    pub const NSIG: usize = 64;
+
+    pub const SIGHUP: i32 = 1;
+    pub const SIGINT: i32 = 2;
+    pub const SIGQUIT: i32 = 3;
+    pub const SIGILL: i32 = 4;
+    pub const SIGTRAP: i32 = 5;
+    pub const SIGABRT: i32 = 6;
+    pub const SIGBUS: i32 = 7;
+    pub const SIGFPE: i32 = 8;
+    pub const SIGKILL: i32 = 9;
+    pub const SIGUSR1: i32 = 10;
+    pub const SIGSEGV: i32 = 11;
+    pub const SIGUSR2: i32 = 12;
+    pub const SIGPIPE: i32 = 13;
+    pub const SIGALRM: i32 = 14;
+    pub const SIGTERM: i32 = 15;
+    pub const SIGCHLD: i32 = 17;
+    pub const SIGCONT: i32 = 18;
+    pub const SIGSTOP: i32 = 19;
+    pub const SIGTSTP: i32 = 20;
+    pub const SIGTTIN: i32 = 21;
+    pub const SIGTTOU: i32 = 22;
+    pub const SIGXCPU: i32 = 24;
+    pub const SIGXFSZ: i32 = 25;
+    pub const SIGWINCH: i32 = 28;
+
+    /// kill(2)-visible disposition constants (also handler addresses
+    /// are any other user pointer).
+    pub const SIG_DFL: u64 = 0;
+    pub const SIG_IGN: u64 = 1;
+
+    /// SA_* bits the M3 kernel accepts (everything else is EINVAL).
+    pub const SA_RESTORER: u64 = 0x0400_0000;
+    pub const SA_NODEFER: u64 = 0x4000_0000;
+    pub const SA_RESETHAND: u64 = 0x8000_0000;
+
+    /// rt_sigprocmask(2) `how`.
+    pub const SIG_BLOCK: i64 = 0;
+    pub const SIG_UNBLOCK: i64 = 1;
+    pub const SIG_SETMASK: i64 = 2;
+
+    /// The 32-byte user sigaction image (rt_sigaction act/oldact):
+    /// little-endian u64 {handler, flags, restorer, mask}.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct UserSigaction {
+        pub handler: u64,
+        pub flags: u64,
+        pub restorer: u64,
+        pub mask: u64,
+    }
+
+    impl UserSigaction {
+        pub const DFL: UserSigaction = UserSigaction {
+            handler: SIG_DFL,
+            flags: 0,
+            restorer: 0,
+            mask: 0,
+        };
+    }
+}

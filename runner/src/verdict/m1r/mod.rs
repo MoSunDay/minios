@@ -93,6 +93,12 @@ pub fn m1r_user_spec() -> SuiteSpec {
             "xv6.prog.zombie",
             "xv6.prog.forktest",
             "xv6.prog.stressfs",
+            "xv6.sig.roundtrip",
+            "xv6.sig.mask_defer",
+            "xv6.ipc.sigpipe",
+            "xv6.sig.except",
+            "xv6.sig.chld",
+            "xv6.sig.alarm",
         ],
     }
 }

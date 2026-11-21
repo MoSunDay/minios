@@ -40,7 +40,12 @@ pub fn sys_read(fd: usize, buf: usize, count: u64) -> i64 {
             let want = core::cmp::min(BSIZE as u32, count as u32 - total);
             let r = fileread(f, chunk.as_mut_ptr(), want as i32);
             if r < 0 {
-                return if total > 0 { total as i64 } else { EIO };
+                // Pass the raw code through: EIO lies about EPIPE, and
+                // -ERESTARTSYS (a signal interrupted an empty pipe
+                // read) must reach the dispatch tail for the rewind —
+                // a partial transfer (total > 0) is the POSIX short
+                // read, never restarted (21 §7).
+                return if total > 0 { total as i64 } else { r as i64 };
             }
             if r > 0 {
                 let rc = uaccess::copyout(
@@ -86,7 +91,9 @@ pub fn sys_write(fd: usize, buf: usize, count: u64) -> i64 {
             }
             let r = filewrite(f, chunk.as_ptr(), want as i32);
             if r < 0 {
-                return if total > 0 { total as i64 } else { EIO };
+                // Same passthrough as sys_read: EPIPE and -ERESTARTSYS
+                // keep their identities (partial writes stand).
+                return if total > 0 { total as i64 } else { r as i64 };
             }
             total += r as u32;
             if (r as u32) < want {

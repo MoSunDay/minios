@@ -402,3 +402,53 @@ mode = "qemu"
 runner_test_name = "run-m1r-user::xv6.ipc.sigpipe"
 requirement = "required"
 adr = ""
+
+[[cases]]
+case_id = "xv6.sig.roundtrip"
+source = "new:sig-roundtrip"
+milestone = "M3"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.sig.roundtrip"
+requirement = "required"
+adr = "ADR-0021"
+
+[[cases]]
+case_id = "xv6.sig.mask_defer"
+source = "new:sig-mask-defer"
+milestone = "M3"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.sig.mask_defer"
+requirement = "required"
+adr = "ADR-0021"
+
+[[cases]]
+case_id = "xv6.sig.except"
+source = "new:sig-except-force"
+milestone = "M3"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.sig.except"
+requirement = "required"
+adr = "ADR-0021"
+
+[[cases]]
+case_id = "xv6.sig.chld"
+source = "new:sigchld-exit"
+milestone = "M3"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.sig.chld"
+requirement = "required"
+adr = "ADR-0021"
+
+[[cases]]
+case_id = "xv6.sig.alarm"
+source = "new:sigalrm-expiry"
+milestone = "M3"
+config = ["CORE-UP-GRUB-R1"]
+mode = "qemu"
+runner_test_name = "run-m1r-user::xv6.sig.alarm"
+requirement = "required"
+adr = "ADR-0021"

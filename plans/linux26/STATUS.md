@@ -815,3 +815,57 @@ M1R 的内部 rust-lld 直链、abi crate、brk allocator、FPU/SSE 与 UserPtr 
   三者均二连跑字节稳定。
 - 决策：ADR-0020（softirq/workqueue/kthread 结构与分歧 + swtch
   槽序教训 + 单时基不变量「softirq 处理器先于首 tick 就位」）。
+
+### m3r-s6（信号：Linux 式信号核心 + EPIPE/SIGPIPE/SIGCHLD，2026-11-21）
+
+- 交付（三段提交）：
+  - **s6a `cce75fd`**：m3suite 拆分——`m3suite/{mod,sched,time,bh}.rs`
+    按行数规约分叶（纯代码搬移；m3-suite 串口 `c423adf7…2a9a`
+    两连跑字节不变）。
+  - **s6b `c737232`**：信号核心——`kernel/sigset.rs`（NSIG=64 位图
+    代数 + SigAction）；Proc 增 `sig_pending/sig_blocked/
+    sig_actions:[SigAction;64]`（freeproc 清零；fork 继承
+    actions+blocked 不继承 pending；exec 保留 blocked+SIG_IGN 其余
+    回 DFL）；Sigframe 208B（retaddr+0/signum+8/magic+16/tf+24/
+    mask+200），`frame_base_for(rsp)=(rsp-344&!0xf)+8`；投递点在
+    syscall/IRQ 出口 + fault_cur 同步路径；rt_sigaction/
+    rt_sigprocmask/rt_sigpending/kill/alarm 系统调用（SA_RESTORER
+    强制、未知位 EINVAL）；m3 16→**19** 例（kthread 信号槽位/
+    NODEFER/RESETHAND 三例）、host-tests **67→75**（+8 sigtests；
+    host 零依赖原则——abi 交叉断言放内核侧 `const _` 块）。
+  - **s6c**：`abi::sig`（编号/SA_*/how/32B UserSigaction，与
+    kernel::sigset 编译期互钉）；pipewrite 环满 readopen==0 → 放
+    管道锁后 `sig_send(SIGPIPE)` → -EPIPE；exit() 持 ptable 锁
+    `sig_send_locked(parent,SIGCHLD)` 先于 wake_up_locked（wait4
+    收尸不依赖 disposition）；fault_cur 强制越过 SIG_IGN（IGN 复
+    位 DFL 再投递，防缺页死循环）；用户态 sys.rs kill/rt_sig*/
+    alarm + `sigreturn_stub`（global_asm `mov rax,15;syscall;ud2`，
+    SA_RESTORER 契约）；m1r-user 39→**45** 例（roundtrip/
+    mask_defer/ipc.sigpipe/except/chld/alarm）+ coverage +5；runner
+    spec 45 id + 冻结断言 39→45；Makefile --milestone M3。
+- 调试期真实缺陷（全修，45 例承保）：
+  1. **sysfile errno 吞并**：分块 sys_read/write 把负返回改写
+    EIO/短读（-512 ERESTARTSYS、-32 EPIPE 被吃）；改原码透传
+    （`total>0 ? total : r`，POSIX 部分传输不重启）。
+  2. **ERESTARTSYS 回卷毁号**：重启臂写 `tf.rax=-512`，回卷的
+    syscall 以 nr=-512 再入 → ENOSYS；Linux orig_ax：入口暂存
+    `orig_nr`，重启臂 `tf.rip-=2; tf.rax=orig_nr`。
+  3. **stub 地址取错**：`static as u64` 加载首个操作码 0x48 而
+    非地址（restorer=0x48 → ifetch 缺页）；`addr_of!` 修正。
+  4. （用例侧）sigpipe 父进程关错端（留 fds[0] → readopen 永不
+    归零 → 子进程满环死睡 wait4 死锁超时；且写已关 fds[1] 得
+    EBADF）；共享 HANDLED 计数跨用例未清（mask_defer 遗留
+    SIGUSR2 → alive 误判）。
+- gate：make all（0 warning，含 user lib unsafe 清理）/fmt/
+  fmt-check/check-rust-only（files=158）绿；host 75/72/5；
+  QEMU 电池 6 目标 PASS：m0r 6/6、m1r 20/20、**m1r-user 45/45 +
+  coverage active=45 not-active=0**、m1r-fault、m2 16/16、m3 19/19。
+- 钉值：m0r `028048dd…20f1`、m1r-suite serial `6137aefd…e585`、
+  m1r-fault serial `ec882ba6…0ffc`、m3 `0e1aa635…c889` 均不变；
+  **新钉 m1r-user serial `da87aa63…f6f6`/root
+  `45cf8a2b…f70`（45 例）**；**重钉 m1r-suite root `341ae68a…
+  15ce`、m1r-fault root `f702cdf2…8ca5`**（root 模板随用户 ELF
+  变化）、**m2 serial `56015653…7a6a`**（vma.layout 动态地址随
+  内核镜像移位）；全部 ×2 字节稳定。
+- 决策：ADR-0021（sigframe/生成点三处/orig_ax 重启契约/errno
+    透传/越过 IGN/与 2.6 的分歧清单）。
