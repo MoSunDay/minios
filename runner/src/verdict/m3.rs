@@ -32,6 +32,9 @@ pub fn m3_suite_spec() -> SuiteSpec {
             "m3.sig.send_state_machine",
             "m3.sig.frame_layout",
             "m3.sig.alarm_sigalrm",
+            "m3.rcu.basic_grace",
+            "m3.rcu.reader_defer",
+            "m3.rcu.gen_swap_pressure",
         ],
     }
 }

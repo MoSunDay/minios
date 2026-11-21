@@ -40,7 +40,6 @@ static RCU_LOCK: Spinlock<()> = Spinlock::new("rcu", ());
 static mut ENGINE: RcuEngine = RcuEngine::new();
 
 /// synchronize_rcu / rcu_barrier sleepers park here.
-#[allow(dead_code)] // s7b: m3 RCU cases
 static mut RCU_WAITQ: waitqueue::WaitQueue = waitqueue::WaitQueue::new();
 
 fn engine_mut() -> &'static mut RcuEngine {
@@ -73,7 +72,6 @@ macro_rules! rcu_assign {
 /// Enter an RCU read-side critical section (UP non-preemptible: a
 /// barrier + the audit marker; rules in the module doc). Never blocks,
 /// never sleeps; safe from any context.
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn rcu_read_lock() {
     ACTIVE_READERS.fetch_add(1, Ordering::SeqCst);
     let p = proc::proc::myproc();
@@ -85,7 +83,6 @@ pub fn rcu_read_lock() {
 
 /// Leave the read side. The last reader out reports the quiescent
 /// state the switch-out could not (deferred QS), unblocking the GP.
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn rcu_read_unlock() {
     let p = proc::proc::myproc();
     if !p.is_null() {
@@ -153,7 +150,6 @@ pub fn check_callbacks(user: bool) {
 
 /// Queue `func(head)` for invocation after a full grace period. Safe
 /// from any context (short internal spin section).
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn call_rcu(head: *mut RcuHead, func: fn(*mut RcuHead)) {
     // SAFETY: caller-owned node until invocation.
     unsafe { (*head).func = func };
@@ -198,13 +194,11 @@ pub fn init() {
 /// `done` and wakes RCU_WAITQ. The sleeper outlives the callback by
 /// construction — it cannot return before its own wake-up.
 #[repr(C)]
-#[allow(dead_code)] // s7b: m3 RCU cases
 struct SyncDone {
     done: AtomicBool,
     head: RcuHead,
 }
 
-#[allow(dead_code)] // s7b: m3 RCU cases
 fn sync_done_cb(h: *mut RcuHead) {
     let sd = ((h as usize) - core::mem::offset_of!(SyncDone, head)) as *mut SyncDone;
     // SAFETY: the sleeper owns `sd` until it observes `done`.
@@ -218,7 +212,6 @@ fn sync_done_cb(h: *mut RcuHead) {
 /// Shared body of synchronize_rcu / rcu_barrier: queue a marker
 /// callback, park on RCU_WAITQ until it fires. FIFO batches make the
 /// marker's invocation imply every earlier callback's invocation.
-#[allow(dead_code)] // s7b: m3 RCU cases
 fn wait_for_callbacks() {
     let mut sd = SyncDone {
         done: AtomicBool::new(false),
@@ -241,14 +234,12 @@ fn wait_for_callbacks() {
 
 /// Wait for a full grace period (every reader active at call time —
 /// and any earlier one — has left its read section).
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn synchronize_rcu() {
     wait_for_callbacks();
 }
 
 /// Wait until every callback queued before this call has been invoked
 /// (pressure cases close with a zeroed account).
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn rcu_barrier() {
     wait_for_callbacks();
 }
@@ -256,21 +247,18 @@ pub fn rcu_barrier() {
 // ---- probes (m3-suite state checks) ----
 
 /// (grace periods completed, callbacks invoked) under RCU_LOCK.
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn stats() -> (u64, u64) {
     let _g = RCU_LOCK.lock();
     engine_mut().stats()
 }
 
 /// Callbacks still waiting for (or inside) a grace period.
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn pending_work() -> bool {
     let _g = RCU_LOCK.lock();
     engine_mut().has_work()
 }
 
 /// Contexts currently inside RCU read sections.
-#[allow(dead_code)] // s7b: m3 RCU cases
 pub fn active_readers() -> usize {
     ACTIVE_READERS.load(Ordering::SeqCst)
 }

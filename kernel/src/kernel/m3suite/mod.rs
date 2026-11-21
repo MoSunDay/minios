@@ -3,7 +3,8 @@
 //! layer, and the s5 kthread/workqueue/softirq machinery. Cases live
 //! in area submodules — `sched` (CFS/RT/waitqueue policy + wiring),
 //! `time` (clocksource/clockevents/hrtimer/wheel), `bh` (kthread/
-//! workqueue/softirq) — while this file owns the merged runner table
+//! workqueue/softirq), `rcu` (grace periods/reader deferral/pressure)
+//! — while this file owns the merged runner table
 //! and the verdict/exit path. Runs in the boot context before the
 //! scheduler starts (policy-level battery; process-level dynamics are
 //! the s4 guest-time counters). Kernel-only (no root disk): boot
@@ -11,6 +12,8 @@
 //! QEMU 33 (0x11 on any failure).
 
 mod bh;
+mod rcu;
+mod rcu_pressure;
 mod sched;
 mod sig;
 mod time;
@@ -23,7 +26,7 @@ pub fn run() -> ! {
     ksymtab_placeholder();
     // Resident bottom-half pressure valve for the softirq cases.
     softirq::spawn_ksoftirqd();
-    let checks: [(&str, fn() -> bool); 19] = [
+    let checks: [(&str, fn() -> bool); 22] = [
         ("m3.cfs.pick_order", sched::case_cfs_pick_order),
         ("m3.cfs.tick_fairness", sched::case_cfs_tick_fairness),
         ("m3.rt.prio_order", sched::case_rt_prio_order),
@@ -55,6 +58,12 @@ pub fn run() -> ! {
         ),
         ("m3.sig.frame_layout", sig::case_sig_frame_layout),
         ("m3.sig.alarm_sigalrm", sig::case_sig_alarm_sigalrm),
+        ("m3.rcu.basic_grace", rcu::case_rcu_basic_grace),
+        ("m3.rcu.reader_defer", rcu::case_rcu_reader_defer),
+        (
+            "m3.rcu.gen_swap_pressure",
+            rcu_pressure::case_rcu_gen_swap_pressure,
+        ),
     ];
     let mut total = 0usize;
     let mut passed = 0usize;
