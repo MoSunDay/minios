@@ -12,6 +12,7 @@ pub mod sched;
 pub mod sleep;
 pub mod waitqueue;
 
+use crate::kernel::sigset::{SigAction, NSIG};
 use crate::kernel::traps::Trapframe;
 use crate::klib::sync::Spinlock;
 use crate::mm::vm::Mm;
@@ -95,6 +96,11 @@ pub struct Proc {
     pub context: Context,
     pub chan: usize,
     pub killed: i32,
+    /// Signal state (21 §6): one pending bit per signal (no RT queueing
+    /// until M9+), the block mask, and per-signal dispositions.
+    pub sig_pending: u64,
+    pub sig_blocked: u64,
+    pub sig_actions: [SigAction; NSIG],
     pub xstate: i32,
     pub fpu: FpuArea,
     /// Open files (xv6 proc.h ofile; fd == index; null == closed).
@@ -131,6 +137,9 @@ pub static mut PTABLE: [Proc; NPROC] = [const {
         context: Context::ZERO,
         chan: 0,
         killed: 0,
+        sig_pending: 0,
+        sig_blocked: 0,
+        sig_actions: [SigAction::DFL; NSIG],
         xstate: 0,
         fpu: FpuArea([0; 512]),
         ofile: [core::ptr::null_mut(); NOFILE],
@@ -149,3 +158,9 @@ pub static mut PTABLE_WAITQ: waitqueue::WaitQueue = waitqueue::WaitQueue::new();
 pub unsafe fn ptable_mut() -> &'static mut [Proc; NPROC] {
     unsafe { &mut *core::ptr::addr_of_mut!(PTABLE) }
 }
+
+/// Proc sizing valve (m3r-s6 decision, ADR-0021): dispositions live
+/// inside the slot for now — 64 x 32 B of SigAction per proc. Assert a
+/// generous ceiling so an accidental growth forces the split into a
+/// separate SIGACTION[NPROC] table.
+const _: () = assert!(core::mem::size_of::<Proc>() <= 4096);

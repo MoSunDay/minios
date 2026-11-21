@@ -228,8 +228,24 @@ pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
             };
             if !handled {
                 oops::user_fault(tf, T_PGFLT);
-                crate::proc::proc::kill_cur_on_fault();
+                super::signal::fault_cur(tf, super::sigset::SIGSEGV);
             }
+        }
+        // Exception -> signal mapping (21 §6): #DE -> SIGFPE, #UD ->
+        // SIGILL, #BP -> SIGTRAP, every other user-mode exception ->
+        // SIGSEGV. force semantics: a blocked disposition cannot defer a
+        // synchronous fault forever.
+        T_DIVIDE if tf.from_user() => {
+            oops::user_fault(tf, T_DIVIDE);
+            super::signal::fault_cur(tf, super::sigset::SIGFPE);
+        }
+        T_ILLOP if tf.from_user() => {
+            oops::user_fault(tf, T_ILLOP);
+            super::signal::fault_cur(tf, super::sigset::SIGILL);
+        }
+        T_BRKPT if tf.from_user() => {
+            oops::user_fault(tf, T_BRKPT);
+            super::signal::fault_cur(tf, super::sigset::SIGTRAP);
         }
         T_GPFLT if !tf.from_user() => fixup_or_oops(tf, "general protection fault in kernel"),
         // Syscalls must arrive through LSTAR (_syscall_entry), never int
@@ -238,7 +254,7 @@ pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
         T_SYSCALL => oops::kernel_fault(tf, "syscall via IDT vector (LSTAR only)"),
         v if v < IRQ_BASE && tf.from_user() => {
             oops::user_fault(tf, v);
-            crate::proc::proc::kill_cur_on_fault();
+            super::signal::fault_cur(tf, super::sigset::SIGSEGV);
         }
         v if v < IRQ_BASE => fixup_or_oops(tf, "kernel exception"),
         _ => fixup_or_oops(tf, "unexpected trap"),
@@ -248,6 +264,11 @@ pub extern "C" fn traps_dispatch(tf: &mut Trapframe) {
     // disabled, a UP simplification vs Linux re-enabling; ADR-0020).
     if tf.vector >= IRQ_BASE {
         super::softirq::irq_exit();
+    }
+    // xv6 usertrap-tail delivery point: any unblocked pending signal
+    // runs its handler/default before the frame returns to user mode.
+    if tf.from_user() {
+        super::signal::userret_deliver(tf);
     }
 }
 
@@ -263,12 +284,22 @@ pub extern "C" fn syscall_dispatch(tf: &mut Trapframe) {
     if ret == abi::ERESTARTSYS {
         // Restartable interruption (21 §3): rewind to the `syscall`
         // insn (2 bytes) so the call re-executes once the interrupt is
-        // handled. Pre-s6 the only source is fatal kill — the
-        // re-entered call returns -1 and the proc exits at its next
-        // user trap (xv6-visible contract).
+        // handled. s6: the interrupter is an unblocked signal — the
+        // delivery below runs the handler first; sigreturn resumes at
+        // the rewound insn and the call restarts cleanly. Fatal kills
+        // still take the pre-s6 route (re-entered call answers -1,
+        // exit at the next user trap).
         tf.rip -= 2;
         tf.rax = abi::ERESTARTSYS as u64;
+        super::signal::userret_deliver(tf);
+        return;
+    }
+    if ret == super::signal::SIGRETURN_RET {
+        // rt_sigreturn restored the whole user context (rax included):
+        // the dispatch tail must not touch the frame again.
+        super::signal::userret_deliver(tf);
         return;
     }
     tf.rax = ret as u64;
+    super::signal::userret_deliver(tf);
 }

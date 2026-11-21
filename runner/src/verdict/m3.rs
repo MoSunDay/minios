@@ -29,6 +29,9 @@ pub fn m3_suite_spec() -> SuiteSpec {
             "m3.softirq.order_bh_mask",
             "m3.softirq.tasklet_sched",
             "m3.softirq.ksoftirqd_pressure",
+            "m3.sig.send_state_machine",
+            "m3.sig.frame_layout",
+            "m3.sig.alarm_sigalrm",
         ],
     }
 }

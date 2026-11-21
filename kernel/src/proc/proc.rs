@@ -131,6 +131,11 @@ pub unsafe fn freeproc(p: *mut Proc) {
     // freeproc only through exit — the reset is belt-and-braces.
     (*p).alarm = crate::kernel::time::wheel::LrTimer::new();
     (*p).alarm_fired = 0;
+    // Signal state: fresh slot = all-default dispositions, empty sets
+    // (fork re-inherits below; pending never crosses fork/exec).
+    (*p).sig_pending = 0;
+    (*p).sig_blocked = 0;
+    (*p).sig_actions = [crate::kernel::sigset::SigAction::DFL; crate::kernel::sigset::NSIG];
     (*p).state = ProcState::UNUSED;
 }
 
@@ -224,6 +229,14 @@ pub fn wait_status(want_pid: i32) -> (i32, i32, u64) {
                 drop(_guard);
                 return (-1, 0, 0);
             }
+            // An unblocked signal interrupts the reap wait without a
+            // zombie to take: answer the -2 marker so sys_wait4 rewinds
+            // (ERESTARTSYS) and the delivery point runs the handler,
+            // then the call re-enters (21 §3 + s6).
+            if crate::kernel::signal::pending_unblocked(me) {
+                drop(_guard);
+                return (-2, 0, 0);
+            }
             // Sleep on the reap wait queue (interruptible: ERESTARTSYS
             // rewinds wait4, whose entry path sees killed and answers
             // -1 — the xv6-visible contract); the scheduler takes the
@@ -289,6 +302,14 @@ pub fn fork() -> i32 {
         // and RT priority (freeproc reset the slot to Normal/0 above).
         (*np).policy = (*me).policy;
         (*np).rt_prio = (*me).rt_prio;
+        // Linux fork semantics: the child inherits the block mask and
+        // dispositions; pending does not carry over.
+        (*np).sig_blocked = (*me).sig_blocked;
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!((*me).sig_actions) as *const u8,
+            core::ptr::addr_of_mut!((*np).sig_actions) as *mut u8,
+            core::mem::size_of::<[crate::kernel::sigset::SigAction; crate::kernel::sigset::NSIG]>(),
+        );
         if !(*me).cwd.is_null() {
             (*np).cwd = crate::fs::xv6fs::inode::idup((*me).cwd);
         }
@@ -301,34 +322,6 @@ pub fn fork() -> i32 {
         sched::runnable_new(np);
     }
     pid
-}
-
-/// Mark `pid` killed; the next trap/sched path exits it.
-pub fn kill(pid: i32) -> i32 {
-    // Scan under the ptable lock, then delegate the mark to kill_proc
-    // (which takes the lock itself — never nested here).
-    let target = {
-        let _guard = PTABLE_LOCK.lock();
-        // SAFETY: ptable lock held.
-        unsafe {
-            let table = super::ptable_mut();
-            let mut found = null_mut();
-            for i in 0..NPROC {
-                let p = &mut table[i] as *mut Proc;
-                if (*p).pid == pid {
-                    found = p;
-                    break;
-                }
-            }
-            found
-        }
-    };
-    if target.is_null() {
-        -1
-    } else {
-        kill_proc(target);
-        0
-    }
 }
 
 /// xv6 kill() body for a known slot: mark killed and wake a sleeper.
@@ -347,9 +340,10 @@ pub fn kill_proc(p: *mut Proc) {
     }
 }
 
-/// alarm(2) expiry (wheel callback): until signals exist (s6) the
-/// delivery is the xv6-kill contract — mark alarm_fired + killed and
-/// wake the sleeper; the process exits at its next user trap.
+/// alarm(2) expiry (wheel callback, s6): mark alarm_fired and deliver
+/// SIGALRM — ignored dispositions drop here, handlers/defaults land at
+/// the sleeper's next user return (interruptible waits wake inside
+/// sig_send).
 pub fn alarm_fire(t: *mut crate::kernel::time::wheel::LrTimer) {
     let p = ((t as usize) - core::mem::offset_of!(Proc, alarm)) as *mut Proc;
     // SAFETY: the timer is the Proc's own alarm field; slot alive.
@@ -357,17 +351,7 @@ pub fn alarm_fire(t: *mut crate::kernel::time::wheel::LrTimer) {
         let _guard = PTABLE_LOCK.lock();
         (*p).alarm_fired = 1;
     }
-    kill_proc(p);
-}
-
-/// User-mode fault path: report already printed; exit without returning.
-pub fn kill_cur_on_fault() -> ! {
-    // SAFETY: process context.
-    unsafe {
-        let p = myproc();
-        (*p).killed = 1;
-    }
-    exit(-1)
+    crate::kernel::signal::sig_send(p, crate::kernel::sigset::SIGALRM);
 }
 
 /// First user process: exec `image` as pid 1 named "init" (BootMode::Full).

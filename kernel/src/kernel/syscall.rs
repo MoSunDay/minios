@@ -18,9 +18,10 @@ use abi::{
     MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, SYS_ALARM, SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP,
     SYS_EXECVE, SYS_EXIT, SYS_EXIT_GROUP, SYS_FORK, SYS_FSTAT, SYS_GETPID, SYS_GETTIMEOFDAY,
     SYS_KILL, SYS_LINK, SYS_MKDIR, SYS_MKNOD, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP,
-    SYS_OPEN, SYS_PIPE, SYS_READ, SYS_SCHED_GETPARAM, SYS_SCHED_GETSCHEDULER,
-    SYS_SCHED_GET_PRIORITY_MAX, SYS_SCHED_GET_PRIORITY_MIN, SYS_SCHED_SETPARAM,
-    SYS_SCHED_SETSCHEDULER, SYS_SCHED_YIELD, SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
+    SYS_OPEN, SYS_PIPE, SYS_READ, SYS_RT_SIGACTION, SYS_RT_SIGPENDING, SYS_RT_SIGPROCMASK,
+    SYS_RT_SIGRETURN, SYS_SCHED_GETPARAM, SYS_SCHED_GETSCHEDULER, SYS_SCHED_GET_PRIORITY_MAX,
+    SYS_SCHED_GET_PRIORITY_MIN, SYS_SCHED_SETPARAM, SYS_SCHED_SETSCHEDULER, SYS_SCHED_YIELD,
+    SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
 };
 
 /// C entry from the syscall stub (tf.rax = number, arg registers follow
@@ -74,13 +75,18 @@ pub fn dispatch(tf: &mut Trapframe) -> i64 {
             crate::proc::proc::exit(a.arg_i32(0));
         }
         SYS_WAIT4 => sys_wait4(a.wait_pid(0), a.arg_opt_ptr(1), a.arg_opt_ptr(3)),
-        SYS_KILL => {
-            if crate::proc::proc::kill(a.arg_i32(0)) == 0 {
-                0
-            } else {
-                ESRCH
-            }
+        SYS_KILL => super::signal::sys_kill(a.arg_i32(0), a.arg_i64(1)),
+        SYS_RT_SIGACTION => {
+            super::signal::sys_rt_sigaction(a.arg_i64(0), a.arg_opt_ptr(1), a.arg_opt_ptr(2))
         }
+        SYS_RT_SIGPROCMASK => super::signal::sys_rt_sigprocmask(
+            a.arg_i64(0),
+            a.arg_opt_ptr(1),
+            a.arg_opt_ptr(2),
+            a.arg64(3),
+        ),
+        SYS_RT_SIGRETURN => super::signal::sys_rt_sigreturn(tf),
+        SYS_RT_SIGPENDING => super::signal::sys_rt_sigpending(a.arg_usize(0), a.arg64(1)),
         _ => ENOSYS,
     }
 }
@@ -197,13 +203,22 @@ fn sys_getpid() -> i64 {
 /// the optional user rusage pointer (both fixup-guarded copyouts).
 fn sys_wait4(pid: i32, wstatus: Option<usize>, rusage: Option<usize>) -> i64 {
     let (reaped, xstate, exec_ns) = crate::proc::proc::wait_status(pid);
+    if reaped == -2 {
+        return abi::ERESTARTSYS;
+    }
     if reaped < 0 {
         return ECHILD;
     }
     if let Some(dst) = wstatus {
         // Linux wait status encoding: bits 8..15 carry the exit code
-        // (WEXITSTATUS); the M1R kernel has no signals yet.
-        let wstatus_val: i32 = (xstate & 0xff) << 8;
+        // (WEXITSTATUS); a signal death (signal::exit_status_for_signal,
+        // xstate = -256-sig) reports the raw signal number (WIFSIGNALED).
+        // The legacy xv6 kill mark (-1) keeps its 0xff exit-code image.
+        let wstatus_val: i32 = if xstate <= -2 {
+            (-xstate) & 0x7f
+        } else {
+            (xstate & 0xff) << 8
+        };
         let r = uaccess::copyout(dst as *mut u8, &wstatus_val as *const i32 as *const u8, 4);
         if r != 0 {
             return r;
@@ -521,8 +536,10 @@ fn sys_nanosleep(req: usize) -> i64 {
                 break;
             }
             // xv6 sys_sleep: a killed sleeper aborts (EINTR); the next
-            // trap from user mode exits it (traps_dispatch).
-            if !p.is_null() && (*p).killed != 0 {
+            // trap from user mode exits it (traps_dispatch). An
+            // unblocked pending signal aborts the same way (s6): its
+            // handler/default runs at the syscall return path.
+            if !p.is_null() && ((*p).killed != 0 || super::signal::pending_unblocked(p)) {
                 crate::kernel::time::TICK_LOCK.raw_release();
                 crate::kernel::time::hrtimer::hrtimer_cancel(&mut timer);
                 return EINTR;

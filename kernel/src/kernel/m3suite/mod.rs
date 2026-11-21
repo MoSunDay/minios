@@ -12,6 +12,7 @@
 
 mod bh;
 mod sched;
+mod sig;
 mod time;
 
 use crate::arch::x86_64::io;
@@ -22,7 +23,7 @@ pub fn run() -> ! {
     ksymtab_placeholder();
     // Resident bottom-half pressure valve for the softirq cases.
     softirq::spawn_ksoftirqd();
-    let checks: [(&str, fn() -> bool); 16] = [
+    let checks: [(&str, fn() -> bool); 19] = [
         ("m3.cfs.pick_order", sched::case_cfs_pick_order),
         ("m3.cfs.tick_fairness", sched::case_cfs_tick_fairness),
         ("m3.rt.prio_order", sched::case_rt_prio_order),
@@ -48,6 +49,12 @@ pub fn run() -> ! {
             "m3.softirq.ksoftirqd_pressure",
             bh::case_softirq_ksoftirqd_pressure,
         ),
+        (
+            "m3.sig.send_state_machine",
+            sig::case_sig_send_state_machine,
+        ),
+        ("m3.sig.frame_layout", sig::case_sig_frame_layout),
+        ("m3.sig.alarm_sigalrm", sig::case_sig_alarm_sigalrm),
     ];
     let mut total = 0usize;
     let mut passed = 0usize;

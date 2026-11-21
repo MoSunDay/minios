@@ -370,6 +370,9 @@ pub unsafe fn exec_elf(
     }
 
     proc::seed_user_tf(tf, entry as usize, rsp);
+    // exec(2) signal reset (Linux): dispositions fall back to default
+    // except kept SIG_IGN; the block mask survives (21 §6).
+    crate::kernel::signal::exec_reset(p);
     if let Some(first) = argv.first() {
         let n = first.len().min(15);
         // SAFETY: name array is 16 bytes; copy bounded by n <= 15.

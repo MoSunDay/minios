@@ -149,9 +149,10 @@ pub unsafe fn wake_up_locked(wq: &mut WaitQueue, one: bool) {
     }
 }
 
-/// Interrupt pending for the current proc: fatal kill today, plus
-/// catchable (unblocked) signal delivery from s6 on.
+/// Interrupt pending for the current proc: fatal kill, plus any
+/// unblocked pending signal (s6) — its handler/default runs at the
+/// sleeper's user return; blocked signals never interrupt.
 pub fn interrupted() -> bool {
     let p = myproc();
-    !p.is_null() && unsafe { (*p).killed != 0 }
+    !p.is_null() && unsafe { (*p).killed != 0 || crate::kernel::signal::pending_unblocked(p) }
 }

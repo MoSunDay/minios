@@ -23,6 +23,8 @@ pub mod ksyms;
 pub mod rbtree;
 #[path = "../../kernel/src/proc/rt.rs"]
 pub mod rt;
+#[path = "../../kernel/src/kernel/sigset.rs"]
+pub mod sigset;
 #[path = "../../kernel/src/mm/slub.rs"]
 pub mod slub;
 #[path = "../../kernel/src/lib/string.rs"]
@@ -109,6 +111,8 @@ mod m3tests;
 mod rbtreetests;
 #[cfg(test)]
 mod rttests;
+#[cfg(test)]
+mod sigtests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
