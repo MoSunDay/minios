@@ -2,15 +2,22 @@
 //! SuperOps. Consumers land in s3+ (the fd table still runs the
 //! legacy fileread/filewrite path this milestone; read_super runs
 //! from the s2 mount registry later), so these are the minimal
-//! honest bindings over the legacy inode primitives.
+//! honest bindings over the legacy inode primitives. m4r-s3 adds the
+//! AddressSpaceOps table: readpage fills one cache page through the
+//! legacy readi (bread over the polling IDE path — the boot-context
+//! discipline init_m1r_fs established); the write family stays NotSup
+//! until s5.
 
 use super::wrapper::VfsInode;
-use crate::fs::vfs::ops::SuperOps;
+use crate::fs::vfs::ops::{AddressSpaceOps, SuperOps};
 use crate::fs::vfs::ops::{FileCommon, FileOps, StatFs, SuperBlock};
+use crate::fs::vfs::pagecache::{AddressSpace, PageDesc};
 use crate::fs::vfs::{VfsErr, VfsResult};
 use crate::fs::xv6fs::inode::{ilock, iunlock, iupdate, readi, writei};
 use crate::fs::xv6fs::log::{begin_op, end_op};
 use crate::fs::xv6fs::{readsb, Superblock as Xv6Sb};
+use crate::klib::string::memset;
+use crate::mm::frame::PGSIZE;
 
 // ---- FileOps (consumers land in s3+: the fd table still runs the
 // legacy fileread/filewrite path this milestone) ----
@@ -130,6 +137,59 @@ pub static XV6_FILE_OPS: FileOps = FileOps {
     fsync: xv6_fsync,
     mmap: None, // s4
     poll: None, // s9 (tty)
+};
+
+// ---- AddressSpaceOps (m4r-s3) ----
+
+/// Fill one page: readi through the wrapper's inode, zero the tail
+/// past EOF, mark uptodate. Short of EOF (a hole or end-of-file page)
+/// still fills — a zero page is the honest image of readi's clamp.
+fn xv6_readpage(mapping: *mut AddressSpace, index: u64, page: *mut PageDesc) -> VfsResult<()> {
+    // SAFETY: the glue binds mapping->host to the owning wrapper
+    // (wrap_new); the wrapper holds the iget ref for the call.
+    let w = unsafe { (*mapping).host as *mut VfsInode };
+    if w.is_null() {
+        return Err(VfsErr::Inval);
+    }
+    let ip = unsafe { (*w).xv6_ip };
+    if unsafe { (*ip).type_ } != crate::fs::xv6fs::layout::T_FILE {
+        return Err(VfsErr::Inval); // dirs/dev never reach the page cache
+    }
+    let off = index * PGSIZE as u64;
+    // SAFETY: page->data is a fresh PGSIZE frame (the glue's kalloc);
+    // readi under ilock is the legacy discipline.
+    unsafe {
+        ilock(ip);
+        let n = readi(ip, (*page).data, off as u32, PGSIZE as u32);
+        iunlock(ip);
+        if n < 0 {
+            return Err(VfsErr::Io);
+        }
+        if (n as usize) < PGSIZE {
+            memset((*page).data.add(n as usize), 0, PGSIZE - n as usize);
+        }
+        (*page).uptodate = true;
+    }
+    Ok(())
+}
+
+fn notsup_writepage(_m: *mut AddressSpace, _p: *mut PageDesc) -> VfsResult<()> {
+    Err(VfsErr::NotSup) // s5 writeback
+}
+
+fn notsup_write_begin(_m: *mut AddressSpace, _i: u64, _p: *mut *mut PageDesc) -> VfsResult<()> {
+    Err(VfsErr::NotSup) // s5
+}
+
+fn notsup_write_end(_m: *mut AddressSpace, _p: *mut PageDesc, _c: usize) -> VfsResult<()> {
+    Err(VfsErr::NotSup) // s5
+}
+
+pub static XV6_ASPACE_OPS: AddressSpaceOps = AddressSpaceOps {
+    readpage: xv6_readpage,
+    writepage: notsup_writepage,
+    write_begin: notsup_write_begin,
+    write_end: notsup_write_end,
 };
 
 pub static XV6_SUPER_OPS: SuperOps = SuperOps {

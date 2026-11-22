@@ -126,11 +126,22 @@ unsafe fn bget(dev: u32, sector: u32) -> *mut Buf {
     }
 }
 
+/// Total bread dispatches (m4r-s3): the page-cache hit gate reconciles
+/// this against pc misses/readpages — a cached range re-read must move
+/// it by zero. Metadata reads (ilock/dir walks) count too; suite cases
+/// snapshot around cache-only activity.
+pub fn bread_count() -> u64 {
+    BREAD_COUNT.load(Ordering::Relaxed)
+}
+
+static BREAD_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// Read a sector through the cache (bread).
 ///
 /// # Safety
 /// The returned buffer is B_BUSY|B_VALID; release with `brelse`.
 pub unsafe fn bread(dev: u32, sector: u32) -> *mut Buf {
+    BREAD_COUNT.fetch_add(1, Ordering::Relaxed);
     // SAFETY: bget discipline upheld; iderw waits for completion.
     unsafe {
         let bp = bget(dev, sector);

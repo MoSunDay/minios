@@ -22,6 +22,10 @@ pub fn m4_suite_spec() -> SuiteSpec {
             "m4.fs.link_two_names",
             "m4.fs.unlink_notempty",
             "m4.fs.table_pressure",
+            "m4.pc.hit_miss",
+            "m4.pc.share_handles",
+            "m4.pc.fill_matches_readi",
+            "m4.pc.evict_clean",
         ],
     }
 }

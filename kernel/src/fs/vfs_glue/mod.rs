@@ -22,6 +22,7 @@
 //! the m4suite walk cases at VfsErr level.
 
 pub mod mutate;
+pub mod pcache;
 mod wrapper;
 pub mod xv6_adapt;
 pub mod xv6_obj;
@@ -73,6 +74,7 @@ pub unsafe fn init() {
         );
         dc().dispose = glue_dispose;
         wrapper::init();
+        pcache::init();
         ROOT_SB.s_op = &xv6_adapt::XV6_SUPER_OPS;
         ROOT_SB.s_dev = crate::fs::xv6fs::layout::ROOTDEV;
         ROOT_SB.s_root = core::ptr::null_mut();

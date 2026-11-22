@@ -114,6 +114,8 @@ mod m2tests;
 #[cfg(test)]
 mod m3tests;
 #[cfg(test)]
+mod pagecachetests;
+#[cfg(test)]
 mod rbtreetests;
 #[cfg(test)]
 mod rcutests;

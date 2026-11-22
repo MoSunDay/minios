@@ -11,6 +11,7 @@
 //! any failure).
 
 mod fsops;
+mod pc;
 mod vfs;
 
 use crate::arch::x86_64::io;
@@ -22,7 +23,7 @@ pub fn run() -> ! {
     // probe already ran sti/hlt cycles during init_m1r_fs; keep them
     // on for the suite's own reads/writes).
     io::sti();
-    let checks: [(&str, fn() -> bool); 9] = [
+    let checks: [(&str, fn() -> bool); 13] = [
         ("m4.namei.root_paths", vfs::case_namei_root_paths),
         ("m4.namei.dirsiz_trunc", vfs::case_namei_dirsiz_trunc),
         ("m4.namei.negative_flip", vfs::case_namei_negative_flip),
@@ -32,6 +33,10 @@ pub fn run() -> ! {
         ("m4.fs.link_two_names", fsops::case_fs_link_two_names),
         ("m4.fs.unlink_notempty", fsops::case_fs_unlink_notempty),
         ("m4.fs.table_pressure", fsops::case_fs_table_pressure),
+        ("m4.pc.hit_miss", pc::case_pc_hit_miss),
+        ("m4.pc.share_handles", pc::case_pc_share_handles),
+        ("m4.pc.fill_matches_readi", pc::case_pc_fill_matches_readi),
+        ("m4.pc.evict_clean", pc::case_pc_evict_clean),
     ];
     let mut total = 0usize;
     let mut passed = 0usize;

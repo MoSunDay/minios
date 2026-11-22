@@ -44,8 +44,10 @@ pub fn case_namei_dirsiz_trunc() -> bool {
     let ok = with_inode(long, |ip| ip.inum == inum)
         && with_inode(short, |ip| ip.inum == inum)
         && matches!(kern_namei(b"/m4dst01234567"), Err(VfsErr::NoEnt));
-    // Teardown always runs (either spelling removes the same dirent).
-    ok && kern_unlink(short).is_ok() && drained_slots() == base
+    // Teardown always runs, hit or miss (either spelling removes the
+    // same dirent; short-circuiting on `ok` would strand the file).
+    let unlinked = kern_unlink(short).is_ok();
+    ok && unlinked && drained_slots() == base
 }
 
 /// miss -> create -> hit -> unlink -> miss: the negative dentry

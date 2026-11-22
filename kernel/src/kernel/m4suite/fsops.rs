@@ -113,8 +113,11 @@ pub fn case_fs_unlink_notempty() -> bool {
     made && kid_made && refused && balanced && gone && drained_slots() == base
 }
 
-/// "/m4prNN" for NN in 0..80 (7 bytes, well under DIRSIZ).
+/// "/m4prNN" for NN in 0..80 (7 bytes, well under DIRSIZ). The two
+/// decimal digits cap N at 100 — callers beyond that need a wider
+/// scheme (asserted so growth fails loud, not silently aliased).
 fn press_name(i: usize) -> [u8; 7] {
+    assert!(i < 100, "press_name: two-digit budget");
     let mut p = *b"/m4pr00";
     p[5] = b'0' + (i / 10) as u8;
     p[6] = b'0' + (i % 10) as u8;

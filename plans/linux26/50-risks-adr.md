@@ -458,6 +458,48 @@
 - 状态：已接受（s2c 时点：host 181、m4 9/9、电池 8 目标 PASS；
   m1r-user serial 与 legacy 字节等价钉持续成立）。
 
+### ADR-0024 M4 s3（UP）：page cache 核心——PageDesc 池/xarray 裁剪/映射归属 wrapper 与读路径
+
+- 背景：23（VFS/block）§2——M4 建 address_space 页缓存：page 记
+  index/mapping/ref/dirty/LRU/private，read/readpage 与 s4 mmap 共享同一
+  缓存，命中/未命中/IO 计数进 gate；脏页在回写成功前禁止回收。
+- 结构（纯核心 `fs/vfs/pagecache/` 四文件 mod/page/tree/lru ≤200 行 +
+  内核胶水 `vfs_glue/pcache.rs` + m4suite `pc.rs` wave-2 四例）：
+  - **描述符与页框分离**：PageDesc 是 VFS 侧视图（index/mapping/ref/
+    dirty/uptodate/private），页框由调用方供给（内核 kalloc 一页），
+    描述符池为静态 arena（256 槽 = 1MiB 缓存上限，DENTRY_POOL 手法）；
+    离缓存页框经 `free_data` 回调归还（内核 kfree；host 测试 None 泄漏
+    ——dcache dispose 先例）。核心不含分配，host 直测。
+  - **索引裁剪（xarray → 有序链表）**：per-mapping 按 index 有序的侵入
+    链表——xv6fs MAXFILE=140 块×512B≈18 页/文件，O(n) 扫描在 M4 规模
+    诚实（dcache 线性扫描先例）；真实 radix 仅当文件规模增长时引入。
+    此为对 23 §2「xarray 风格（按文件规模裁剪）」的显式取用。
+  - **映射归属**：InodeCommon 嵌入 `i_data: AddressSpace`（Linux 形状），
+    `i_mapping` 指向自身（tmpfs/shm 换目标留 s6）；wrap_new 对 T_FILE 绑
+    `XV6_ASPACE_OPS` 并设 host 回指。映射与 wrapper 1:1（= 与 dentry
+    1:1，ADR-0023 契约延伸）：wrapper_free 先 invalidate_mapping 排干
+    idle 干净页，残留活页（pinned/dirty）在 M4 不可能（无写路径、读端
+    不跨调用持 pin）——assert 失败即响，s4 mmap/s5 回写时点 revisit。
+  - **读路径（kern_readpage 族）**：`kern_read_cached` 逐页 lookup（命中
+    拷贝+put）；未命中 kalloc→insert(带 pin)→**放锁**派发 a_ops->
+    readpage（xv6 readi+bread 轮询盘路径，s2c 已验）→回拷+put。失败路径
+    remove+kfree。`kern_page_probe`（探针）/`kern_pc_reclaim`（压力）/
+    `kern_readahead`（仅计数钩子，窗口算法属 Parity——23 §1 纪律）。
+  - **ref 契约**：lookup 返回即持 pin（find_get_page 语义），put 归零
+    上 inactive LRU 尾；LRU 仅 ref==0 页；reclaim FIFO 扫描跳过 dirty
+    （23 §2「禁止以回收为名丢数据」）；池满时 insert 自回收最老干净页
+    （池压力即 evict-clean 驱动）；全 dirty/活钉池 → Err(NoSpc)。
+  - **锁序（钉死）**：DENTRY_LOCK → PC_LOCK → KMEM_LOCK（wrapper 销毁
+    嵌套 PC 于 DENTRY 内；reclaim 在 PC 内 kfree）。PC_LOCK 从不在中断
+    上下文获取、从不跨可睡眠 fs 调用持有（readpage 的 ilock 可睡眠，
+    故 insert 后放锁填页；UP 不可重入竞争）。
+  - **sys_read 改道时序**：冻结 legacy fileread（字节钉）；改道需
+    m1r-user 字节等价证明（s2b namei 直通手法），s4/s5 择机。m4suite
+    wave-2 四例（表 9→13）：hit_miss（二次读 bread 增量为 0、计数器对
+    账）、share_handles（同帧共享）、fill_matches_readi（含 EOF 零尾）、
+    evict_clean（FIFO 淘汰→重填）。buffer.rs 增 bread 计数器（纯增量）。
+- 状态：已接受（s3 时点：host 195、m4 13/13、电池见 STATUS s3 记录）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

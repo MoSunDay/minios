@@ -11,7 +11,7 @@
 | Core-2.6（M0R–M8） | 🟢 M0R–M3 done（M4–M8 pending） | M0R/M1R 见 [STATUS-history/m0r-m1r.md](STATUS-history/m0r-m1r.md)；M2 判绿 HEAD `67bc6ca` + CI run 44556592736 success（[STATUS-history/m2.md](STATUS-history/m2.md)）；M3 判绿（m3 22/22、host 156、电池 6×2 字节稳定，HEAD `d4bc6a7` 树）+ `b5dfbaf` 推送触发 CI（[STATUS-history/m3.md](STATUS-history/m3.md)） |
 | Parity-2.6（M9+） | ⬜ **pending** | 未启动；权威差距表、Parity 配置和外部矩阵均未验收 |
 
-最近同步：2026-11-21。唯一实现基线为 Linux 2.6.39.4 / x86_64；不沿用旧完成度或工期。
+最近同步：2026-11-22。唯一实现基线为 Linux 2.6.39.4 / x86_64；不沿用旧完成度或工期。
 
 ## 里程碑状态
 
@@ -21,7 +21,7 @@
 | M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟢 **done**（2026-11-19 判绿） | 净树 HEAD `ef2a335` 电池 9 步 EXIT0（smoke/m1r-suite/m1r-user 35+coverage/m1r-fault/demo-full，serial 钉值 `028048dd…`/`6137aefd…`/`0c39a3e5…`/`1ba8b13a…` 全复现）；CI run 44381221846 success；详见 [STATUS-history/m0r-m1r.md](STATUS-history/m0r-m1r.md) |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | 🟢 **done**（m2r-s1–s7，2026-11-20 判绿） | 物理页基础 + VMA/brk/mmap/COW fork + 匿名 OOM 全链交付：本地电池 + CI run 44556592736（`67bc6ca`）双绿；m2 套件 16/16、m1r-user 39/39；证据见 [STATUS-history/m2.md](STATUS-history/m2.md) |
 | M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE、RCU | 🟢 **done**（m3r-s1–s7，2026-11-21 判绿） | CFS+RT+waitqueue+时间层+kthread/workqueue/softirq+信号+RCU 全链交付：m3-suite 22/22、m1r-user 45/45+coverage、host 156、QEMU 电池 6 目标 ×2 字节稳定（HEAD `d4bc6a7` 树）；证据见 [STATUS-history/m3.md](STATUS-history/m3.md) |
-| M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | ⬜ pending | 等 M3 全绿 |
+| M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | 🟡 **进行中**（m4r-s0–s3，2026-11-22） | VFS 纯核+内核胶合+fd 表补全+m4suite 脚手架+page cache 核与读路径已交付：host 195、QEMU 电池 8 目标 PASS、m4 13/13（钉 `13740dda…`）；ADR-0024；详见 m4r 滚动窗口 |
 | M5 | 第二盘 ext4 RO 与 host/guest 黄金清单 | ⬜ pending | 等 M4 全绿；M5 起启用 host ext4 管线 |
 | M6 | 独立 `^has_journal` 副本 RW、htree/大文件/fsync | ⬜ pending | 等 M5 全绿 |
 | M7 | `has_journal` jbd2 ordered/replay 与 200 次有效 crash | ⬜ pending | 等 M6 全绿 |
@@ -232,3 +232,61 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   m1r-suite-root/m3 共 7 项 serial/root 钉逐字节一致——含 gate 修正
   （NotDir 原样传播）下 m1r-user serial 仍 `da87aa63…`，证明冻结电池
   无任何用例走 file 中段路径，legacy 字节等价持续成立。
+
+### m4r-s3（page cache 纯核 + 读路径接线：pagecache 四文件 + pcache 胶合 + m4suite wave-2，2026-11-22）
+
+- 交付（计划 20-roadmap M4 s3a+s3b；ADR-0024）：
+  - 纯核 `kernel/src/fs/vfs/pagecache/`（4 文件 565 行：mod 58 / page 130
+    / tree 206 / lru 171）：`AddressSpace{a_ops,host,root,nrpages}`、
+    `PageDesc` + const `PageCacheStats::ZERO`、PageCache 引擎（池内
+    PageDesc 数组 + free list；insert/lookup/remove、note_readpage/
+    note_readahead 计数钩子）、LRU（ref/put 引脚语义、FIFO 回收净页
+    跳过脏页——23 §2 不丢已写数据、invalidate_mapping 逐映射作废）；
+  - 索引结构 = per-mapping index 有序侵入链表——对 Linux xarray 的
+    主动裁剪（xv6fs MAXFILE=140 块 ≈18 页/文件，dcache 线性扫先例），
+    已记 ADR-0024 divergence；lookup 返回 pin（find_get_page 契约）；
+    insert 池满自 LRU 回收最旧净页（NPAGE_DESC=256 ≈1 MiB 缓存）；帧
+    kalloc + `free_data` 回调（内核侧 = kfree）；锁序 DENTRY_LOCK →
+    PC_LOCK → KMEM_LOCK，PC_LOCK 绝不跨睡眠 fs 调用（readpage 持
+    ilock 可睡 → insert-then-unlock-fill）；
+  - `ops.rs`：InodeCommon 内嵌 `i_data: AddressSpace` + `i_mapping`
+    指针（Linux 形态，mapping 由 wrapper/dentry 1:1 持有）；
+    AddressSpaceOps 重钉 page 类型（`*mut AddressSpace`/`*mut PageDesc`）；
+  - host 测试 `host-tests/src/pagecachetests.rs` 14 例（369 行；含
+    double-put panic、FIFO 回收序、脏页存活、池压自回收、计数器对账）；
+  - 内核胶合 `vfs_glue/pcache.rs`（281 行）：PC 静态池 + PC_LOCK、
+    init（free_data=kfree）、`kern_read_cached`（读走缓存）、
+    `kern_page_probe`/PageProbe、`kern_pc_reclaim`、`pc_stats`、
+    `kern_readahead`（#[allow(dead_code)]，s4 预留）；`wrapper.rs`
+    wrap_new 绑 mapping（仅 T_FILE 挂 a_ops=&XV6_ASPACE_OPS）+
+    wrapper_free 作废 mapping 并断言 nrpages==0；`xv6_obj.rs`
+    XV6_ASPACE_OPS + xv6_readpage（readi + EOF 尾零填 + uptodate，
+    写侧 NotSup 桩）；`buffer.rs` 加 `bread_count()` 门钩；
+  - m4suite wave-2 `m4suite/pc.rs` 4 例（262 行）：`hit_miss`（首读
+    miss→bread+1，二读命中 bread 不变）、`share_handles`（两 fd 同页
+    共享）、`fill_matches_readi`（缓存页逐字节 == readi 直读）、
+    `evict_clean`（回收后重读仍正确）；make_file 改每 512B chunk 一
+    事务（xv6 LOGSIZE=30 约束，原单事务 16 KiB 写 panic "too big a
+    transaction"）；mod.rs 例表 9→13；runner verdict/m4.rs spec 同步；
+  - 评审遗留修复：fsops dirsiz_trunc 拆卸改无条件 `kern_unlink`（不以
+    unlink 结果分支泄漏探测文件）；vfs press_name `assert!(i<100)`
+    防御环。
+- scope 判定（brief 默认）：净页 LRU 回收纳入 s3 ✓；readahead 仅计数
+  钩子（窗口算法归 Parity）；sys_read 冻结 legacy fileread（字节等价
+  证明留 s4/s5 决断）。
+- gate：make all 0 警告 / fmt-check / check-rust-only files=183→190 /
+  test-host 181→195（113+77+5，+14 pagecache）；runner 77 自测 PASS。
+- QEMU 电池 **8 目标全 PASS**；m4 套件 **13/13**，serial 新钉
+  `13740dda8cf154c0610f160a0cb6a8b2caae1ba4d03d05274f072811942de90f`
+  （复跑稳定）；demo-full PASS（serial `18dbc99a…`，非钉值）。
+- 钉值：**7 项逐字节不变**（m0r serial `028048dd…20f1`；m1r-suite
+  serial `6137aefd…e585` + root `312ff398…f12e`；m1r-user serial
+  `da87aa63…22f6` + root `5a040446…f180d`；m1r-fault root
+  `f702cdf2…8ca5`；m3 `e7b5a2fc…1b1e`）——sys_read 冻结在 legacy
+  fileread、缓存路径仅 m4suite 并行取证，legacy 字节等价持续成立。
+  重钉 2 项（worktree `94836ec` 重建先复现旧钉、逐行 diff 归因后
+  移除）：m2 serial `49180fd2…`→`4ed54600…`（仅 2 行：zones DMA=0x870→0x867
+  与 directmap 对 0xf841/0xf849→0xf838/0xf840——内核镜像 +9 页致启动
+  空闲页水位平移，+8 关系保持）；m1r-fault serial `fa350131…`→
+  `ad8e1f58…`（4 行，全部仅 cr2 rodata 页
+  `0xffffffff8002e000→0x…80031000`，代码偏移逐行相同）。

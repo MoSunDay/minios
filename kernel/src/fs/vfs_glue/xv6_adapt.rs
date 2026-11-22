@@ -356,7 +356,7 @@ fn notsup_symlink(
 
 /// FileOps/SuperOps live in xv6_obj.rs (object-level ops); the
 /// re-export keeps the adapter surface one name (`xv6_adapt::XV6_*`).
-pub use super::xv6_obj::{XV6_FILE_OPS, XV6_SUPER_OPS};
+pub use super::xv6_obj::{XV6_ASPACE_OPS, XV6_FILE_OPS, XV6_SUPER_OPS};
 
 /// The namespace vtable (statics: fn-pointer structs, no
 /// traits/classes); file/super tables in xv6_obj.rs.

@@ -10,11 +10,12 @@
 //! {read, write, iterate, llseek, ioctl?, fsync, mmap?, poll?} (AIO/
 //! sendfile/inotify are M10 and must not grow back into this table),
 //! AddressSpaceOps {readpage, writepage, write_begin, write_end} — the
-//! page-typed signatures are pinned in s3 when the page cache lands;
-//! until then the mapping argument is an opaque pointer.
+//! page-typed signatures pinned in s3 (mapping is *mut AddressSpace,
+//! pages are *mut PageDesc; the write family stays NotSup until s5).
 
 use super::dentry::Dentry;
 use super::namei::Cred;
+use super::pagecache::{AddressSpace, PageDesc};
 use super::{VfsErr, VfsResult};
 
 /// Header embedded at the head of every superblock (fs-private tail
@@ -60,6 +61,11 @@ pub struct InodeCommon {
     /// I_DIRTY-style state bits (writeback tags them in s5).
     pub i_state: u32,
     pub i_private: *mut u8,
+    /// This inode's page cache (Linux: i_mapping usually == &i_data;
+    /// a distinct target is tmpfs/shm-era, s6).
+    pub i_mapping: *mut AddressSpace,
+    /// The embedded address space i_mapping points at (m4r-s3).
+    pub i_data: AddressSpace,
 }
 
 impl InodeCommon {
@@ -82,6 +88,8 @@ impl InodeCommon {
             i_sb: core::ptr::null_mut(),
             i_state: 0,
             i_private: core::ptr::null_mut(),
+            i_mapping: core::ptr::null_mut(),
+            i_data: AddressSpace::EMPTY,
         }
     }
 
@@ -199,13 +207,16 @@ pub struct FileOps {
     pub poll: Option<fn(file: *mut FileCommon, mask: u32) -> VfsResult<u32>>,
 }
 
-/// Address-space (page cache) ops. s3 pins the page-typed signatures
-/// when fs/pcache lands; `mapping` stays opaque until then.
+/// Address-space (page cache) ops, signatures pinned in m4r-s3.
+/// readpage fills page->data (one page at `index`; zero the tail past
+/// EOF and set uptodate). The write family is s5 (NotSup until then).
 pub struct AddressSpaceOps {
-    pub readpage: fn(mapping: *mut u8, index: u64, page: *mut *mut u8) -> VfsResult<()>,
-    pub writepage: fn(mapping: *mut u8, page: *mut u8) -> VfsResult<()>,
-    pub write_begin: fn(mapping: *mut u8, index: u64, page: *mut *mut u8) -> VfsResult<()>,
-    pub write_end: fn(mapping: *mut u8, index: u64, page: *mut u8, copied: usize) -> VfsResult<()>,
+    pub readpage: fn(mapping: *mut AddressSpace, index: u64, page: *mut PageDesc) -> VfsResult<()>,
+    pub writepage: fn(mapping: *mut AddressSpace, page: *mut PageDesc) -> VfsResult<()>,
+    pub write_begin:
+        fn(mapping: *mut AddressSpace, index: u64, page: *mut *mut PageDesc) -> VfsResult<()>,
+    pub write_end:
+        fn(mapping: *mut AddressSpace, page: *mut PageDesc, copied: usize) -> VfsResult<()>,
 }
 
 /// Dispatch helper: run `inode->i_op->permission` when the fs overrode

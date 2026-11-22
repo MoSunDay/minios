@@ -9,6 +9,7 @@
 use super::mutate;
 use super::DENTRY_LOCK;
 use crate::fs::vfs::ops::InodeCommon;
+use crate::fs::vfs::pagecache::AddressSpace;
 use crate::fs::vfs::{VfsErr, VfsResult, S_IFBLK, S_IFCHR, S_IFDIR, S_IFREG};
 use crate::fs::xv6fs::inode::Inode as Xv6Inode;
 
@@ -66,6 +67,20 @@ pub(crate) unsafe fn wrap_new(ip: *mut Xv6Inode) -> VfsResult<*mut VfsInode> {
         e.c.i_op = &super::xv6_adapt::XV6_INODE_OPS;
         e.c.i_fop = &super::xv6_adapt::XV6_FILE_OPS;
         e.c.i_sb = &raw mut super::ROOT_SB;
+        // The page-cache binding (m4r-s3): one mapping per wrapper,
+        // 1:1 with its dentry — i_mapping points at the embedded
+        // i_data (the Linux shape), regular files get the address-
+        // space vtable.
+        e.c.i_mapping = &raw mut e.c.i_data;
+        e.c.i_data = AddressSpace {
+            a_ops: if (*ip).type_ == crate::fs::xv6fs::layout::T_FILE {
+                &super::xv6_adapt::XV6_ASPACE_OPS
+            } else {
+                core::ptr::null()
+            },
+            host: w as *mut u8,
+            ..AddressSpace::EMPTY
+        };
         e.xv6_ip = ip;
         Ok(w)
     }
@@ -114,8 +129,25 @@ pub(crate) unsafe fn release_wrapper(w: *mut VfsInode) {
 }
 
 /// Return a wrapper slot to the free chain. Caller holds DENTRY_LOCK.
+/// The mapping dies here (dentry 1:1, ADR-0023/0024): idle clean pages
+/// drop to the pool and their frames go back through free_data. A
+/// pinned or dirty survivor is impossible in M4 (no write path; cache
+/// readers never hold pins across calls) — fail loud rather than leak
+/// pages into a recycled slot's fresh mapping.
 pub(crate) unsafe fn wrapper_free(w: *mut VfsInode) {
     unsafe {
+        // PC_LOCK nests inside the caller's DENTRY_LOCK (order pinned
+        // in the pcache module doc; DENTRY_LOCK is held here).
+        let _g = super::pcache::PC_LOCK.lock();
+        let pc = super::pcache::pcache();
+        let m = &mut (*w).c.i_data;
+        pc.invalidate_mapping(m);
+        assert!(
+            m.nrpages == 0,
+            "pagecache: mapping teardown with live pages"
+        );
+        (*w).c.i_mapping = core::ptr::null_mut();
+        drop(_g);
         (*w).c.i_lru_next = INODE_FREE as *mut InodeCommon;
         INODE_FREE = w;
     }

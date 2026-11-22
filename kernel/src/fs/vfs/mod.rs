@@ -24,6 +24,7 @@ pub mod devict;
 pub mod icache;
 pub mod namei;
 pub mod ops;
+pub mod pagecache;
 
 /// stat.h file-type bits (Linux values; shared by DAC and type checks).
 pub const S_IFMT: u16 = 0o170_000;
