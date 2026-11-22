@@ -7,11 +7,12 @@
 
 use super::{drained_slots, with_inode};
 use crate::fs::buffer::bread_count;
+use crate::fs::vfs::VfsErr;
 use crate::fs::vfs_glue::pcache::{
-    kern_gate_peek, kern_page_probe, kern_pc_reclaim, kern_read_cached, kern_window_set, pc_stats,
-    PageProbe,
+    kern_gate_peek, kern_page_probe, kern_pc_reclaim, kern_read_cached, kern_read_cached_ip,
+    kern_window_set, pc_stats, PageProbe,
 };
-use crate::fs::vfs_glue::{kern_create, kern_unlink, CreateKind};
+use crate::fs::vfs_glue::{kern_create, kern_namei, kern_unlink, CreateKind};
 use crate::fs::xv6fs::inode::{ilock, iput, iunlock, readi, writei, Inode};
 use crate::fs::xv6fs::log::{begin_op, end_op};
 use crate::mm::frame::PGSIZE;
@@ -438,6 +439,131 @@ pub fn case_pc_probe_pressure() -> bool {
         && refilled
         && torn
         && cleanup
+        && drained_slots() == base
+}
+
+/// The fd-side entry (m4r-s4a-2): kern_read_cached_ip through a
+/// self-held inode reference — the exact shape sys_read rides
+/// (sysfile.rs). One case pins the three gaps the path-entry waves
+/// left open: the fd entry's wrapper-scan hit, the readi-exact clamp
+/// taxonomy (off>size / off==size / tail clamp), and the scan-miss
+/// uncached fallback. The fallback is deterministic: kern_namei's
+/// idup reference survives the unlink (unlinked-but-open keeps the
+/// bytes), and drained_slots' zombie reclaim frees the wrapper —
+/// wrapper_free clears i_mapping, so the fd scan must miss.
+pub fn case_pc_fd_read() -> bool {
+    let path = b"/m4pcfdr";
+    let base = drained_slots();
+    let size = PGSIZE + 512; // 1.5 pages: a full page + a 512-byte tail
+    let made = make_file(path, size);
+    // Pin the RA hint: probe_pressure's dead mapping lingers in it.
+    crate::fs::vfs_glue::readahead::reset();
+    let s0 = pc_stats();
+    let b0 = bread_count();
+    let warmed = made && read_verify(path, size);
+    let s1 = pc_stats();
+    // Warm shape: idx0 cold miss + idx1 sequential miss; the 双页窗
+    // clamps empty at the last page (size's last page is idx1).
+    let warm = warmed
+        && s1.misses - s0.misses == 2
+        && s1.readpages - s0.readpages == 2
+        && s1.inserts - s0.inserts == 2
+        && s1.hits == s0.hits
+        && s1.readahead == s0.readahead
+        && bread_count() > b0;
+    // The self-held reference (kern_namei's idup; survives unlink).
+    let named = match kern_namei(path) {
+        Ok(ip) => ip,
+        Err(_) => core::ptr::null_mut(),
+    };
+    // Wrapper-scan hit: the cached name still shadows the inode, the
+    // fd entry rides the shared range core — one resident-page hit.
+    let mut buf = [0u8; PGSIZE];
+    let s2 = pc_stats();
+    let hit = !named.is_null()
+        && match kern_read_cached_ip(named, 0, &mut buf) {
+            Ok(PGSIZE) => (0..PGSIZE).all(|i| buf[i] == pat(i)),
+            _ => false,
+        };
+    let s3 = pc_stats();
+    let hit_shape = hit && s3.hits - s2.hits == 1 && s3.misses == s2.misses;
+    // readi-exact clamp taxonomy: off > size is the legacy -1
+    // spelling; off == size reads nothing; both stay on the pre-page
+    // paths, so the counters freeze through them.
+    let err_past_eof = hit_shape
+        && matches!(
+            kern_read_cached_ip(named, size as u64 + 1, &mut buf[..8]),
+            Err(VfsErr::Io)
+        );
+    let at_eof = err_past_eof
+        && matches!(
+            kern_read_cached_ip(named, size as u64, &mut buf[..8]),
+            Ok(0)
+        );
+    let s4 = pc_stats();
+    let clamp_quiet = at_eof
+        && s4.hits == s3.hits
+        && s4.misses == s3.misses
+        && s4.inserts == s3.inserts
+        && s4.readpages == s3.readpages;
+    // Tail clamp: len runs past EOF, end = size — exactly 256 bytes
+    // off the resident page 1 (one more hit, nothing else moves).
+    let tail = clamp_quiet
+        && match kern_read_cached_ip(named, size as u64 - 256, &mut buf[..512]) {
+            Ok(256) => (0..256).all(|i| buf[i] == pat(size - 256 + i)),
+            _ => false,
+        };
+    let s5 = pc_stats();
+    let tail_shape = tail
+        && s5.hits - s4.hits == 1
+        && s5.misses == s4.misses
+        && s5.readpages == s4.readpages
+        && s5.inserts == s4.inserts;
+    // Fallback: unlink under the held reference, then drain — the
+    // zombie reclaim frees the wrapper and clears its mapping, so
+    // the scan must miss and the read rides read_uncached (legacy
+    // readi bytes; real disk traffic, the cache never hears of it).
+    let unlinked = kern_unlink(path).is_ok();
+    let _ = drained_slots(); // its reclaim is the point (evicts move here)
+    let s6 = pc_stats();
+    let b6 = bread_count();
+    let fb_full = unlinked
+        && tail_shape
+        && match kern_read_cached_ip(named, 0, &mut buf) {
+            Ok(PGSIZE) => (0..PGSIZE).all(|i| buf[i] == pat(i)),
+            _ => false,
+        };
+    let fb_tail = fb_full
+        && match kern_read_cached_ip(named, PGSIZE as u64, &mut buf[..512]) {
+            Ok(512) => (0..512).all(|i| buf[i] == pat(PGSIZE + i)),
+            _ => false,
+        };
+    let s7 = pc_stats();
+    let b7 = bread_count();
+    let fallback_shape = fb_tail
+        && s7.hits == s6.hits
+        && s7.misses == s6.misses
+        && s7.inserts == s6.inserts
+        && s7.readpages == s6.readpages
+        && b7 > b6;
+    // Teardown: the held idup ref is the last one on a nlink==0 inode
+    // — its iput truncates, so it needs a transaction (the
+    // reclaim_zombies precedent). Runs on every path (the reference
+    // outlives the case body regardless of intermediate failures).
+    if !named.is_null() {
+        // SAFETY: kern_namei's idup'd reference; the truncating iput
+        // runs inside the transaction (xv6 discipline).
+        unsafe {
+            begin_op();
+            iput(named);
+            end_op();
+        }
+    }
+    made && warm
+        && hit_shape
+        && clamp_quiet
+        && tail_shape
+        && fallback_shape
         && drained_slots() == base
 }
 

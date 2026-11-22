@@ -29,6 +29,7 @@ pub fn m4_suite_spec() -> SuiteSpec {
             "m4.pc.gate_window",
             "m4.pc.readahead_seq",
             "m4.pc.probe_pressure",
+            "m4.pc.fd_read",
         ],
     }
 }

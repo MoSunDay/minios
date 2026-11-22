@@ -371,3 +371,53 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   保持）。
 - 结论：ADR-0024 两项待决已关闭（ADR-0025），s4a **go-live ready**；
   下一步 s4 续（mmap 文件页 / 回收深化 / tmpfs·tty·BIO flush 按 brief）。
+
+### m4r-s4a-2（s4a review 收口：fd 入口永久用例 m4.pc.fd_read，表 16→17，2026-11-22）
+
+- 背景：s4a 静态 review 判定三项 **P0 测试缺口**（生产路径零永久
+  覆盖）：① fd 入口 `kern_read_cached_ip`（`pcache.rs`）无任何内核
+  套件用例——wave-2/3 全走 path 入口 `kern_read_cached`；② 扫描 miss
+  → `read_uncached` 回退分支在影子打点删除后无永久用例（该分支是
+  「无 dentry 遮蔽 inode」时生产读的唯一路径）；③ readi 精确 clamp
+  分类（off>size→`Err(Io)` / off==size→`Ok(0)` / 尾部 clamp）无断言。
+- 交付（`m4suite/pc.rs` + `m4suite/mod.rs` + `verdict/m4.rs`，表
+  16→17）：新例 `m4.pc.fd_read`（`/m4pcfdr`，PGSIZE+512=1.5 页）一例
+  钉死三项 P0：
+  - 预热形状：readahead reset 后 read_verify——misses+2 /
+    readpages+2 / inserts+2、双页窗 clamp 至空（尾页=idx1）；
+  - **fd 扫描命中**：`kern_namei` 自持 idup 引用（跨 unlink 存活）+
+    `kern_read_cached_ip` 全页读：字节==pat 且 hits 恰 +1、misses
+    不动；
+  - **clamp 分类**：off=size+1→`Err(VfsErr::Io)`、off==size→
+    `Ok(0)`（两条预页路径计数冻结）、off=size−256 len 512→`Ok(256)`
+    字节==pat（恰一次常驻页 hit）；
+  - **回退确定性构造**：unlink 叶子→dentry Detached（RCU retire）+
+    zombie 入队；`drained_slots()` 借 `reclaim_zombies` 排空→
+    `wrapper_free` 清 `i_mapping`→扫描必 miss→readi 直读全页+尾部
+    字节==pat；期间 pc_stats（hits/misses/inserts/readpages）全程
+    冻结 + `bread_count` 严格递增（真实盘流，缓存零可见）；
+  - 收尾：截断 iput 包事务（`reclaim_zombies` 先例）+ 台账归位；
+    teardown（unlink/iput）在所有路径无条件执行——本例早败不泄
+    slot/引用（套件其余用例保持既有形状，记录不动）。
+- P1/P2 记录不动（review 判定不阻塞）：用例早败 teardown 泄漏（套件
+  既有形状）；`kern_read_cached_ip` 每 chunk O(128) 全池扫描（性能项，
+  s8 waitqueue 重评一并处理）；`kern_window_set` 开窗被读路径穿越→
+  活锁 panic（boot 单上下文用例序不可达，by-design 响亮失败）；
+  `readahead_fill` absent 检查与 `fill_page` 间 TOCTOU（单上下文不可
+  达，s8 并发下 insert-Busy 自愈）。
+- gate：cargo fmt --all -- --check / make all 0 警告 / check-rust-only
+  files=191（无新文件）/ test-host 197（115+77+5）/ runner 77。
+- QEMU 电池 **8 目标全 PASS**；m4 套件 **17/17 首跑即绿**，serial 新钉
+  `86af35904794752c875bed6835956e42b8de17cd746632358b742ac52fede603`。
+- 钉值：**7 项逐字节不变**（m0r serial `028048dd…20f1`；m1r-suite
+  serial `6137aefd…e585` + root `312ff398…f12e`；m1r-user serial
+  `da87aa63…22f6f` + root `5a040446…f180`；m1r-fault root
+  `f702cdf2…8ca5`；m3 `e7b5a2fc…1b1e`）。归因重钉 2 项（worktree
+  `9c20601` 隔离 target 复现旧钉后逐行 diff）：m2 serial
+  `13aaf67c…`→`07e82d5e…`（2/20 行：zones DMA 0x863→0x862 与
+  directmap 0xf834/0xf83c→0xf833/0xf83b——内核镜像 +1 页水位平移，
+  +8 关系保持）；m1r-fault serial `96d35874…`→`f38db2be…`（4/14 行
+  全部仅 cr2 rodata 页 0x…80033000→0x…80034000，RIP/backtrace 逐字节
+  同）。
+- 结论：三项 P0 已永久钉死，s4a-2 **go-live ready**；下一步 s4 续
+  （mmap 文件页 / 回收深化 / tmpfs·tty·BIO flush 按 brief）。

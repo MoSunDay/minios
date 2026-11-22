@@ -23,7 +23,7 @@ pub fn run() -> ! {
     // probe already ran sti/hlt cycles during init_m1r_fs; keep them
     // on for the suite's own reads/writes).
     io::sti();
-    let checks: [(&str, fn() -> bool); 16] = [
+    let checks: [(&str, fn() -> bool); 17] = [
         ("m4.namei.root_paths", vfs::case_namei_root_paths),
         ("m4.namei.dirsiz_trunc", vfs::case_namei_dirsiz_trunc),
         ("m4.namei.negative_flip", vfs::case_namei_negative_flip),
@@ -40,6 +40,7 @@ pub fn run() -> ! {
         ("m4.pc.gate_window", pc::case_pc_gate_window),
         ("m4.pc.readahead_seq", pc::case_pc_readahead_seq),
         ("m4.pc.probe_pressure", pc::case_pc_probe_pressure),
+        ("m4.pc.fd_read", pc::case_pc_fd_read),
     ];
     let mut total = 0usize;
     let mut passed = 0usize;

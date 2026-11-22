@@ -566,6 +566,12 @@ s3 起由哨兵守卫：`read_page_bytes` 命中快路径 debug_assert（触发�
   逐字节零漂移（含 m1r-user serial——改道不可见）；m4 新钉
   `49804f50…ad793`；m1r-fault/m2 归因重钉=内核镜像 +~4 页：cr2 rodata
   +2 页×4 行、DMA/directmap 水位 −4 页，+8 关系保持）。
+- 补记（s4a-2，2026-11-22）：review 判定三项 P0 测试缺口（fd 入口
+  `kern_read_cached_ip` 零套件用例、扫描 miss→read_uncached 回退在影子
+  打点删除后无永久用例、readi 精确 clamp 分类无断言）——新增
+  `m4.pc.fd_read` 一例钉死（表 16→17；回退经「unlink 后 drained_slots
+  排空 zombie → wrapper_free 清 i_mapping → 扫描必 miss」确定性构造，
+  unlinked-but-open 由 kern_namei 自持 idup 引用成立）。
 
 ## B. 风险登记册
 
