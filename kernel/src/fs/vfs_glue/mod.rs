@@ -23,6 +23,7 @@
 
 pub mod mutate;
 pub mod pcache;
+pub mod readahead;
 mod wrapper;
 pub mod xv6_adapt;
 pub mod xv6_obj;

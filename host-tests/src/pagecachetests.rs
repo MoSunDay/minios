@@ -4,7 +4,7 @@
 //! whole-mapping invalidate — driving the real kernel files (included
 //! by path; no test-only copy to drift).
 
-use crate::vfs::pagecache::{AddressSpace, PageCache, PageDesc};
+use crate::vfs::pagecache::{AddressSpace, PageCache, PageDesc, Peek};
 use crate::vfs::VfsErr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -366,4 +366,54 @@ fn full_cycle_counter_reconciliation() {
     assert_eq!(pc.stats.evicts, 1);
     assert_eq!(pc.stats.readpages, 2);
     assert_eq!(pc.stats.nrpages, 1);
+}
+
+/// The ADR-0025 fill-window gate states: a fresh insert classifies as
+/// Filling (!uptodate — the insert-then-unlock-fill window), flips to
+/// Ready carrying the page once filled, and Absent after removal —
+/// and none of it moves the hit/miss counters.
+#[test]
+fn peek_gate_states_and_counter_freedom() {
+    let (mut pc, _pool) = engine();
+    let m = mapping();
+    assert_eq!(unsafe { pc.peek(m, 0) }, Peek::Absent);
+    // SAFETY: fresh frame, live mapping; insert pin held by the test.
+    let f = frame(9);
+    let pg = unsafe { pc.insert(m, 0, f).unwrap() };
+    assert!(matches!(unsafe { pc.peek(m, 0) }, Peek::Filling(p) if p == pg));
+    let (h0, m0) = (pc.stats.hits, pc.stats.misses);
+    for _ in 0..3 {
+        assert!(matches!(unsafe { pc.peek(m, 0) }, Peek::Filling(p) if p == pg));
+    }
+    // SAFETY: pinned page; the filler's completion mark.
+    unsafe { (*pg).uptodate = true };
+    match unsafe { pc.peek(m, 0) } {
+        Peek::Ready(p) => assert_eq!(p, pg),
+        other => panic!("expected Ready, got {:?}", other),
+    }
+    // Gate peeks are counter-free.
+    assert_eq!((pc.stats.hits, pc.stats.misses), (h0, m0));
+    // SAFETY: caller-held pin; removal hands the frame back.
+    let back = unsafe { pc.remove(m, pg) };
+    assert_eq!(back, f);
+    assert_eq!(unsafe { pc.peek(m, 0) }, Peek::Absent);
+}
+
+/// The gate classifies per-index: neighbors stay Absent while one
+/// page sits mid-fill.
+#[test]
+fn peek_gate_is_per_index() {
+    let (mut pc, _pool) = engine();
+    let m = mapping();
+    // SAFETY: fresh frame, live mapping; held pin.
+    let pg = unsafe { pc.insert(m, 7, frame(1)).unwrap() };
+    assert_eq!(unsafe { pc.peek(m, 6) }, Peek::Absent);
+    assert!(matches!(unsafe { pc.peek(m, 7) }, Peek::Filling(p) if p == pg));
+    assert_eq!(unsafe { pc.peek(m, 8) }, Peek::Absent);
+    // SAFETY: held pin.
+    unsafe { pc.put_page(pg) };
+    // Idle-but-filling pages are still reclaimable (clean + idle):
+    // the window never blocks teardown.
+    assert_eq!(pc.reclaim_clean(1), 1);
+    assert_eq!(unsafe { pc.peek(m, 7) }, Peek::Absent);
 }

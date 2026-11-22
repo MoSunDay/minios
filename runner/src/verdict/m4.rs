@@ -26,6 +26,9 @@ pub fn m4_suite_spec() -> SuiteSpec {
             "m4.pc.share_handles",
             "m4.pc.fill_matches_readi",
             "m4.pc.evict_clean",
+            "m4.pc.gate_window",
+            "m4.pc.readahead_seq",
+            "m4.pc.probe_pressure",
         ],
     }
 }

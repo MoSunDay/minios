@@ -29,7 +29,7 @@ pub mod page;
 pub mod tree;
 
 pub use page::{PageCacheStats, PageDesc};
-pub use tree::PageCache;
+pub use tree::{PageCache, Peek};
 
 use super::ops::AddressSpaceOps;
 

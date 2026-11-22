@@ -8,7 +8,8 @@
 use super::{drained_slots, with_inode};
 use crate::fs::buffer::bread_count;
 use crate::fs::vfs_glue::pcache::{
-    kern_page_probe, kern_pc_reclaim, kern_read_cached, pc_stats, PageProbe,
+    kern_gate_peek, kern_page_probe, kern_pc_reclaim, kern_read_cached, kern_window_set, pc_stats,
+    PageProbe,
 };
 use crate::fs::vfs_glue::{kern_create, kern_unlink, CreateKind};
 use crate::fs::xv6fs::inode::{ilock, iput, iunlock, readi, writei, Inode};
@@ -94,10 +95,13 @@ pub fn case_pc_hit_miss() -> bool {
     let pass2 = pass1 && read_verify(path, size);
     let s2 = pc_stats();
     let b2 = bread_count();
-    // Pass 1: every page a miss, every miss a readpage, disk moved.
-    let fill = s1.misses - s0.misses == 4
+    // Pass 1 (readahead active, m4r-s4a): idx0 cold miss, idx1
+    // sequential miss + 双页窗 RA{2,3}, idx2/3 prefetched hits.
+    let fill = s1.misses - s0.misses == 2
         && s1.readpages - s0.readpages == 4
-        && s1.hits == s0.hits
+        && s1.hits - s0.hits == 2
+        && s1.inserts - s0.inserts == 4
+        && s1.readahead - s0.readahead == 2
         && b1 > 0;
     // Pass 2: every page a hit, zero refill, zero disk traffic.
     let cached = s2.hits - s1.hits == 4
@@ -259,4 +263,201 @@ pub fn case_pc_evict_clean() -> bool {
         && empty
         && torn
         && drained_slots() == base
+}
+
+// ---- wave-3 (m4r-s4a): fill-window gate, readahead, probe under pressure ----
+
+/// The ADR-0025 fill window: a resident !uptodate page classifies as
+/// Filling at the SAME gate the read path spins on (never a copy of a
+/// half-filled frame), flips back to Ready when the fill completes,
+/// and peeks carry no hit/miss counters. Bytes through the closed
+/// window still read back correct.
+pub fn case_pc_gate_window() -> bool {
+    let path = b"/m4pcgw0";
+    let base = drained_slots();
+    let size = PGSIZE;
+    let made = make_file(path, size);
+    let warmed = made && read_verify(path, size);
+    // Ready on the filled page.
+    let ready = warmed && kern_gate_peek(path, 0) == 2;
+    // Open the window: the page goes !uptodate mid-fill shape.
+    let opened = ready && kern_window_set(path, 0, false);
+    let filling = opened && kern_gate_peek(path, 0) == 1;
+    // Gate peeks are counter-free (the wait loop must not pollute).
+    let quiet = filling && {
+        let s1 = pc_stats();
+        kern_gate_peek(path, 0);
+        let s2 = pc_stats();
+        s2.hits == s1.hits && s2.misses == s1.misses
+    };
+    // Close the window: Ready again, and the bytes never changed.
+    let closed = quiet && kern_window_set(path, 0, true) && kern_gate_peek(path, 0) == 2;
+    let reads_ok = closed && read_verify(path, size);
+    let torn = kern_unlink(path).is_ok();
+    made && warmed
+        && ready
+        && opened
+        && filling
+        && quiet
+        && closed
+        && reads_ok
+        && torn
+        && drained_slots() == base
+}
+
+/// Sequential readahead (双页窗): a sequential demand miss fills the
+/// window ahead; prefetched pages hit without further IO; a window
+/// clamped at the last page prefetches nothing past EOF; broken-run
+/// misses never fill ahead. Counters must reconcile exactly.
+pub fn case_pc_readahead_seq() -> bool {
+    let path = b"/m4pcra0";
+    let path2 = b"/m4pcra1";
+    let base = drained_slots();
+    let size = 6 * PGSIZE;
+    let made = make_file(path, size) && make_file(path2, 4 * PGSIZE);
+    crate::fs::vfs_glue::readahead::reset();
+    let s0 = pc_stats();
+    let pass1 = made && read_verify(path, size);
+    let s1 = pc_stats();
+    let b1 = bread_count();
+    // idx0 miss (cold hint); idx1 seq miss + RA{2,3}; idx2/3 hits;
+    // idx4 seq miss + RA{5} (window clamped at last page 5); idx5 hit.
+    let fill = pass1
+        && s1.misses - s0.misses == 3
+        && s1.readpages - s0.readpages == 6
+        && s1.hits - s0.hits == 3
+        && s1.inserts - s0.inserts == 6
+        && s1.readahead - s0.readahead == 3
+        && b1 > 0;
+    // Re-read: pure hits, zero fills, zero disk traffic.
+    let pass2 = fill && read_verify(path, size);
+    let s2 = pc_stats();
+    let b2 = bread_count();
+    let cached = pass2
+        && s2.hits - s1.hits == 6
+        && s2.misses == s1.misses
+        && s2.readpages == s1.readpages
+        && b2 == b1;
+    // Broken runs on a cold file: idx2 then idx0 both miss without a
+    // predecessor; idx1 (sequential after 0) misses and its window
+    // finds idx2 resident, prefetching only idx3.
+    let mut buf = [0u8; PGSIZE];
+    let r1 = cached
+        && match kern_read_cached(path2, 2 * PGSIZE as u64, &mut buf) {
+            Ok(PGSIZE) => (0..PGSIZE).all(|i| buf[i] == pat(2 * PGSIZE + i)),
+            _ => false,
+        };
+    let s3 = pc_stats();
+    let broke1 = r1 && s3.misses - s2.misses == 1 && s3.readpages - s2.readpages == 1;
+    let r2 = broke1
+        && match kern_read_cached(path2, 0, &mut buf) {
+            Ok(PGSIZE) => (0..PGSIZE).all(|i| buf[i] == pat(i)),
+            _ => false,
+        };
+    let s4 = pc_stats();
+    let broke2 = r2 && s4.misses - s3.misses == 1 && s4.readpages - s3.readpages == 1;
+    let r3 = broke2
+        && match kern_read_cached(path2, PGSIZE as u64, &mut buf) {
+            Ok(PGSIZE) => (0..PGSIZE).all(|i| buf[i] == pat(PGSIZE + i)),
+            _ => false,
+        };
+    let s5 = pc_stats();
+    let seq_tail = r3
+        && s5.misses - s4.misses == 1
+        && s5.readpages - s4.readpages == 2 // demand idx1 + RA idx3
+        && s5.readahead - s4.readahead == 1;
+    let torn = kern_unlink(path).is_ok() && kern_unlink(path2).is_ok();
+    made && pass1
+        && fill
+        && pass2
+        && cached
+        && broke1
+        && broke2
+        && seq_tail
+        && torn
+        && drained_slots() == base
+}
+
+/// Probe under dcache pressure: churn enough names to evict the
+/// warmed file's idle dentry — the wrapper (and its mapping) dies
+/// with it, the probe walks a FRESH wrapper and sees no pages, and
+/// the re-read refills byte-correct from disk.
+/// Concurrent churn files: past the 50-slot xv6 relief valve, well
+/// under the 200-inode disk budget.
+const CHURN_FILES: usize = 120;
+
+pub fn case_pc_probe_pressure() -> bool {
+    let path = b"/m4pcpp0";
+    let base = drained_slots();
+    let made = make_file(path, PGSIZE);
+    let warmed = made && read_verify(path, PGSIZE);
+    let mut p0 = PageProbe::ABSENT;
+    let resident =
+        warmed && kern_page_probe(path, 0, &mut p0).is_ok() && p0.present && p0.nrpages == 1;
+    // Churn enough fresh names to evict the warmed dentry: the
+    // 50-slot xv6 table forces relieve_inode_pressure to prune idle
+    // LRU dentries long before the 256-slot dcache fills, and this
+    // file's dentry is the oldest idle one. 120 stays inside the
+    // 200-inode disk budget (base + warmed + churn < 200).
+    let mut churn_ok = true;
+    let mut name = [0u8; 16];
+    for i in 0..CHURN_FILES {
+        let len = write_name(&mut name, b"/m4pp", i);
+        match kern_create(&name[..len], CreateKind::File) {
+            Ok(ip) => {
+                // SAFETY: balancing put for the created reference.
+                unsafe { iput(ip) };
+            }
+            Err(_) => {
+                churn_ok = false;
+                break;
+            }
+        }
+    }
+    let mut gone = PageProbe::ABSENT;
+    let evicted = churn_ok
+        && resident
+        && kern_page_probe(path, 0, &mut gone).is_ok()
+        && !gone.present
+        && gone.nrpages == 0;
+    // The file itself is intact: re-read refills byte-correct.
+    let refilled = evicted && read_verify(path, PGSIZE);
+    let torn = refilled && kern_unlink(path).is_ok();
+    // Churn teardown (slot ledger must return to baseline).
+    let mut cleanup = true;
+    for i in 0..CHURN_FILES {
+        let len = write_name(&mut name, b"/m4pp", i);
+        if kern_unlink(&name[..len]).is_err() {
+            cleanup = false;
+        }
+    }
+    made && warmed
+        && resident
+        && churn_ok
+        && evicted
+        && refilled
+        && torn
+        && cleanup
+        && drained_slots() == base
+}
+
+/// `/prefix` + decimal `i` + NUL into `name`; returns the length.
+fn write_name(name: &mut [u8; 16], prefix: &[u8], i: usize) -> usize {
+    let mut len = prefix.len();
+    name[..len].copy_from_slice(prefix);
+    let mut buf = [0u8; 8];
+    let mut j = buf.len();
+    let mut n = i;
+    loop {
+        j -= 1;
+        buf[j] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    name[len..len + buf.len() - j].copy_from_slice(&buf[j..]);
+    len += buf.len() - j;
+    name[len] = 0;
+    len
 }

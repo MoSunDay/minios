@@ -12,8 +12,8 @@
 
 use core::mem::size_of;
 
-use crate::fs::file_table::{fileclose, filedup, fileread, filestat, filewrite, File};
-use crate::fs::xv6fs::layout::{Stat, BSIZE};
+use crate::fs::file_table::{fileclose, filedup, fileread, filestat, filewrite, File, FileState};
+use crate::fs::xv6fs::layout::{Stat, BSIZE, T_FILE};
 use crate::ipc::pipe::pipealloc;
 use crate::mm::uaccess;
 use crate::proc::proc::myproc;
@@ -24,6 +24,11 @@ use abi::{EBADF, EINVAL, EIO, EMFILE};
 use super::syspath::fdalloc;
 
 /// read(2): fd-table dispatch with a per-block kernel bounce.
+/// Regular-file descriptors ride the page cache (m4r-s4a): same
+/// BSIZE chunking, same EOF/EFAULT/partial semantics — byte-equality
+/// against the legacy readi path was proven by the s4a shadow-diff
+/// battery run before the flip (ADR-0025). Pipes and device/dir
+/// inodes keep the legacy fileread.
 pub fn sys_read(fd: usize, buf: usize, count: u64) -> i64 {
     if count > i32::MAX as u64 {
         return EINVAL;
@@ -32,6 +37,22 @@ pub fn sys_read(fd: usize, buf: usize, count: u64) -> i64 {
         Some(f) => f,
         None => return EBADF,
     };
+    // SAFETY: the File's inode reference keeps the type stable.
+    let cached_file = unsafe {
+        match (*f).state {
+            FileState::Inode { ip, .. } => (*ip).type_ == T_FILE,
+            _ => false,
+        }
+    };
+    if cached_file {
+        return sys_read_cached(f, buf, count);
+    }
+    sys_read_legacy(f, buf, count)
+}
+
+/// The legacy read path, unchanged (pipes, device and directory
+/// inodes — and the shadow-diff baseline while s4a proved the cache).
+fn sys_read_legacy(f: *mut File, buf: usize, count: u64) -> i64 {
     let mut chunk = [0u8; BSIZE];
     let mut total: u32 = 0;
     // SAFETY: chunk is a kernel bounce; copyout faults as EFAULT.
@@ -60,6 +81,54 @@ pub fn sys_read(fd: usize, buf: usize, count: u64) -> i64 {
             }
             if (r as u32) < want {
                 break; // short read (EOF)
+            }
+        }
+    }
+    total as i64
+}
+
+/// The cached read path: identical outer chunking to the legacy loop
+/// (BSIZE at a time, EOF short-read break, partial-count EFAULT), so
+/// the byte stream and return values match the frozen battery shape.
+/// Off the File's shared offset advances BEFORE copyout — the legacy
+/// fileread advanced inside its ilock window, consuming the chunk
+/// even when the user copy later faults.
+fn sys_read_cached(f: *mut File, buf: usize, count: u64) -> i64 {
+    let ip = match unsafe { (*f).state } {
+        FileState::Inode { ip, .. } => ip,
+        _ => return EBADF,
+    };
+    let mut chunk = [0u8; BSIZE];
+    let mut total: u32 = 0;
+    // SAFETY: chunk is a kernel bounce; copyout faults as EFAULT.
+    unsafe {
+        while total < count as u32 {
+            let want = core::cmp::min(BSIZE as u32, count as u32 - total) as usize;
+            let off = match (*f).state {
+                FileState::Inode { off, .. } => off as u64,
+                _ => return EBADF,
+            };
+            match crate::fs::vfs_glue::pcache::kern_read_cached_ip(ip, off, &mut chunk[..want]) {
+                Err(_) => {
+                    // The legacy readi -1 spelling (off > size class);
+                    // partial chunks before it stay POSIX-visible.
+                    return if total > 0 { total as i64 } else { -1 };
+                }
+                Ok(0) => break, // EOF
+                Ok(c) => {
+                    // Consume first (the legacy ilock-window shape).
+                    if let FileState::Inode { off, .. } = &mut (*f).state {
+                        *off += c as u32;
+                    }
+                    let rc = uaccess::copyout((buf + total as usize) as *mut u8, chunk.as_ptr(), c);
+                    if rc != 0 {
+                        return if total > 0 { total as i64 } else { rc };
+                    }
+                    total += c as u32;
+                    if c < want {
+                        break; // short read (EOF)
+                    }
+                }
             }
         }
     }

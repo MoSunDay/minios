@@ -22,6 +22,12 @@ const NVINODE: usize = 128;
 pub struct VfsInode {
     pub c: InodeCommon,
     pub xv6_ip: *mut Xv6Inode,
+    /// The dentry died while readers held references (ADR-0025): the
+    /// release is deferred to the last wrapper_put.
+    pub dying: bool,
+    /// Slot generation (monotonic): the readahead hint's stale-slot
+    /// guard — a recycled slot never matches an old hint.
+    pub epoch: u64,
 }
 
 impl VfsInode {
@@ -29,6 +35,8 @@ impl VfsInode {
         VfsInode {
             c: InodeCommon::empty(),
             xv6_ip: core::ptr::null_mut(),
+            dying: false,
+            epoch: 0,
         }
     }
 }
@@ -37,6 +45,7 @@ static mut INODE_POOL: [VfsInode; NVINODE] = [const { VfsInode::empty() }; NVINO
 /// Free wrapper chain threaded through `c.i_lru_next` (the s1 icache
 /// LRU links are unused while a wrapper is free — s6 owns them).
 static mut INODE_FREE: *mut VfsInode = core::ptr::null_mut();
+static mut WRAP_EPOCH: u64 = 0;
 
 /// Build the free chain. Boot context, no concurrency.
 pub(super) unsafe fn init() {
@@ -61,6 +70,12 @@ pub(crate) unsafe fn wrap_new(ip: *mut Xv6Inode) -> VfsResult<*mut VfsInode> {
         INODE_FREE = (*w).c.i_lru_next as *mut VfsInode;
         let e = &mut *w;
         e.c = InodeCommon::empty();
+        // i_count == 1: the owning dentry's reference (the icache
+        // discipline, ADR-0025); readers add theirs via wrapper_get.
+        e.c.i_count = 1;
+        e.dying = false;
+        WRAP_EPOCH += 1;
+        e.epoch = WRAP_EPOCH;
         e.c.i_dev = (*ip).dev;
         e.c.i_ino = (*ip).inum;
         e.c.i_mode = iftype_to_mode((*ip).type_);
@@ -112,12 +127,30 @@ fn iftype_to_mode(t: i16) -> u16 {
     }
 }
 
-/// Release a wrapper (its dentry died): the shadowed inode reference
-/// goes back. nlink == 0 defers the final iput to process context via
-/// the zombie list (it may truncate + sleep); a plain drop happens
-/// inline. Caller holds DENTRY_LOCK.
+/// Release the dentry's reference on a wrapper (its dentry died).
+/// With readers in flight (i_count > 1, e.g. a cached read sleeping
+/// in readpage while an unlink negates the name — ADR-0025) the
+/// release is deferred: the wrapper (and its mapping) stays alive
+/// until the last wrapper_put, so pins never outlive their mapping.
+/// Caller holds DENTRY_LOCK.
 pub(crate) unsafe fn release_wrapper(w: *mut VfsInode) {
     unsafe {
+        (*w).c.i_count -= 1; // the dentry's reference
+        if (*w).c.i_count > 0 {
+            (*w).dying = true;
+            return; // wrapper_put finishes the release
+        }
+        finish_release_locked(w);
+    }
+}
+
+/// The release tail, shared by release_wrapper and the deferred
+/// wrapper_put: nlink == 0 defers the final iput to process context
+/// via the zombie list (it may truncate + sleep); a plain drop
+/// happens inline. Caller holds DENTRY_LOCK, i_count == 0.
+unsafe fn finish_release_locked(w: *mut VfsInode) {
+    unsafe {
+        debug_assert!((*w).c.i_count == 0);
         let ip = (*w).xv6_ip;
         if (*ip).nlink < 1 {
             mutate::zombie_push(w); // owns the ref + slot for now
@@ -128,6 +161,68 @@ pub(crate) unsafe fn release_wrapper(w: *mut VfsInode) {
     }
 }
 
+/// Find a live wrapper shadowing `ip` and take a reference on it
+/// (i_count++; covers dying wrappers: an unlinked-but-open file keeps
+/// its mapping until the last reader — the Linux page-cache shape).
+/// The whole scan+take runs under DENTRY_LOCK, balanced against
+/// release_wrapper's drop. Null: no cached name shadows the inode
+/// (never walked, or long pruned) — callers fall back to uncached IO.
+pub(crate) unsafe fn wrapper_get_for_ip(ip: *mut Xv6Inode) -> *mut VfsInode {
+    unsafe {
+        DENTRY_LOCK.raw_lock();
+        let mut found = core::ptr::null_mut();
+        for i in 0..NVINODE {
+            let c = &raw mut INODE_POOL[i];
+            // Live slots carry a mapping binding (wrapper_free clears
+            // it); free-chain slots may hold stale xv6_ip values.
+            if (*c).c.i_mapping.is_null() || (*c).xv6_ip != ip {
+                continue;
+            }
+            (*c).c.i_count += 1;
+            found = c;
+            break;
+        }
+        DENTRY_LOCK.raw_release();
+        found
+    }
+}
+
+/// Drop a wrapper_get_for_ip reference. The last put on a dying
+/// wrapper finishes the deferred dentry release. Must NOT be called
+/// under PC_LOCK (the free path nests PC inside DENTRY).
+pub(crate) unsafe fn wrapper_put(w: *mut VfsInode) {
+    unsafe {
+        DENTRY_LOCK.raw_lock();
+        (*w).c.i_count -= 1;
+        if (*w).c.i_count == 0 && (*w).dying {
+            finish_release_locked(w);
+        }
+        DENTRY_LOCK.raw_release();
+    }
+}
+
+/// Take a reader reference on a KNOWN wrapper (the kern_read_cached
+/// shape: the walk's dentry pin does not survive an unlink's
+/// negate-in-place, i_count does). Returns false when the wrapper
+/// died in the walk-to-here window (freed slot) — callers fall back
+/// to uncached IO.
+pub(crate) unsafe fn wrapper_get(w: *mut VfsInode) -> bool {
+    unsafe {
+        DENTRY_LOCK.raw_lock();
+        let live = !(*w).c.i_mapping.is_null();
+        if live {
+            (*w).c.i_count += 1;
+        }
+        DENTRY_LOCK.raw_release();
+        live
+    }
+}
+
+/// The wrapper's slot generation (readahead stale-hint guard).
+pub(crate) fn wrapper_epoch(w: *mut VfsInode) -> u64 {
+    unsafe { (*w).epoch }
+}
+
 /// Return a wrapper slot to the free chain. Caller holds DENTRY_LOCK.
 /// The mapping dies here (dentry 1:1, ADR-0023/0024): idle clean pages
 /// drop to the pool and their frames go back through free_data. A
@@ -136,6 +231,10 @@ pub(crate) unsafe fn release_wrapper(w: *mut VfsInode) {
 /// pages into a recycled slot's fresh mapping.
 pub(crate) unsafe fn wrapper_free(w: *mut VfsInode) {
     unsafe {
+        debug_assert!(
+            (*w).c.i_count == 0,
+            "pagecache: wrapper_free with live reader refs"
+        );
         // PC_LOCK nests inside the caller's DENTRY_LOCK (order pinned
         // in the pcache module doc; DENTRY_LOCK is held here).
         let _g = super::pcache::PC_LOCK.lock();

@@ -506,9 +506,66 @@ uptodate 即拷贝出垃圾）。M4 不可达：当前唯一读者是 boot 单�
 顺序调用（m4suite/sys_read 冻结在 legacy fileread），无并发窗口。
 `s4` brief 必须钉死两件事：① 等待机制三选一（uptodate 忙等门 /
 waitqueue 睡眠 / 页锁）；② sys_read 改道 page cache 的 m1r-user
-字节等价证明时点（先并行后切换，还是一次切换）。`uptodate` 字段自
+字节等价证明时点（先并行后切换，还是一次切换）。
+（**已由 ADR-0025 关闭**：忙等门 + 一次切换、影子证明先行。）`uptodate` 字段自
 s3 起由哨兵守卫：`read_page_bytes` 命中快路径 debug_assert（触发即
 填页竞态真实可达，停下修等待机制，不是摘 assert）。
+
+### ADR-0025 M4 s4a（UP）：uptodate 忙等门 + sys_read 改道 page cache（影子字节等价）+ 双页窗 readahead
+
+- 背景：ADR-0024「已知缺口」（s3-2 补记）钉死的两件必决：① 填页窗口
+  等待机制三选一；② sys_read 改道时点与字节等价证明方式。
+- 决策：
+  - **等待机制：uptodate 忙等门**（三选一最小项）。核心新增
+    `Peek{Absent, Filling(*mut PageDesc), Ready(*mut PageDesc)}`：无
+    计数、无 pin 的门分类（忙等循环不得污染 hit/miss 对账）。读路径
+    peek 到 Filling 即在门上忙等（GATE_SPIN_MAX=1_000_000 次，进程
+    上下文 yield_cpu；超限 panic=活锁哨兵，非静默重试）。**busy-winner
+    插入分支进同一道门**：并发 miss 的后到者 insert 失败 → peek →
+    Filling → 同一忙等，绝不二次 readpage。选型理由：M4 唯一读者是
+    boot 单上下文顺序调用，真实并发窗口不存在；waitqueue/页锁是 s8
+    SMP 的前置工程，M4 引入即投机。**重评时点 s8**（首次真并发）。
+    boot 上下文窗口不可达（单上下文）；门的价值 = m4suite 可编程开窗
+    （kern_window_set）证语义 + s8 前回归防线。
+  - **sys_read 改道：一次切换，影子字节等价先行**。T_FILE fd →
+    `kern_read_cached_ip`（wrapper_get_for_ip 按 xv6_ip 扫描绑定；
+    扫描 miss → read_uncached：readi 直读，字节等同 legacy）；管道/
+    设备/目录 fd 冻结 legacy fileread。**证明时序**：切换代码落库前，
+    以临时影子打点（repo 先例：事后必删）在 sys_read_cached 内对每个
+    BSIZE 窗口双读——回卷 f.off 经 legacy fileread 复放同一窗口，计数
+    与逐字节比对，mismatch 即 panic——跑满 8 目标电池全 PASS 零 panic
+    后移除打点；冻结钉 m1r-user serial `da87aa63…22f6f` 逐字节零漂移
+    为第二重证明。EOF/错误分类亦对账（Err↔-1、Ok(0)↔0）。
+  - **wrapper 生命周期补全**：`i_count`=读者引用（icache 语义）叠加
+    dentry 持有引用；unlink negate-in-place 与 dentry prune 走
+    `dying` 延迟释放——最后一个 wrapper_put 完成 release（nlink==0 →
+    zombie 链延后 iput，否则 iput+wrapper_free），保证 unlink 不可能在
+    途读者脚下释放映射；`epoch`（单调槽代）guard readahead hint 对抗
+    槽复用假阳性。f.off 先进后 copyout（legacy consume-then-copy 形
+    状）；off>size → `VfsErr::Io`（readi -1 拼写）；ilock 不跨填页持
+    有（readpage 内嵌 ilock）。
+  - **readahead 双页窗激活**：demand miss 且 hint 连续（上页==本页-1
+    且同 epoch）→ 预取 {idx+1, idx+2}，clamp 在 last_page；纯预取不进
+    hit/miss 计数（readahead 计数器单列）；断流 miss（无前驱）不预取。
+    双页极简窗口为 M4 顺序读语义取证；窗口策略归 Parity 层另行决策。
+- m4suite wave-3（表 13→16）：`gate_window`（Ready→开窗 Filling→关窗
+  Ready 双向翻转、门 peek 无计数、字节全程不变）、`readahead_seq`
+  （顺序 6 readpage/3 RA/3 hit + 二读纯命中零盘流 + 断流不预取 + 尾页
+  clamp）、`probe_pressure`（120 文件 churn：50 槽 inode 表 relief 阀
+  驱逐最老 idle dentry → probe 走 fresh wrapper 零页 → 重读字节正确；
+  预算 120 < 200 磁盘 inode）。
+- 踩坑记录（两枚真实 bug，bisect 分离归因）：
+  1. probe_pressure 初版 `kern_create` Ok(ip) 未 iput（每文件泄一 iget
+     引用 → `iget: no inodes`）；且 300 并发文件超 200 磁盘 inode 预算
+     → `ialloc` panic。修正：平衡 iput + churn=120。
+  2. `Peek::Filling` 初版不携带 PageDesc 指针，`kern_window_set` 关窗
+     分支（Filling→Ready）静默 no-op（"already open" 臂丢弃请求）→
+     gate_window 挂在 closed 步。修正：Filling(*mut PageDesc) 对称
+     携带，开/关双向翻转。
+- 状态：已接受（s4a 时点：host 197、m4 16/16、电池 8 目标 PASS；7 钉
+  逐字节零漂移（含 m1r-user serial——改道不可见）；m4 新钉
+  `49804f50…ad793`；m1r-fault/m2 归因重钉=内核镜像 +~4 页：cr2 rodata
+  +2 页×4 行、DMA/directmap 水位 −4 页，+8 关系保持）。
 
 ## B. 风险登记册
 

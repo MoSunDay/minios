@@ -21,7 +21,7 @@
 | M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟢 **done**（2026-11-19 判绿） | 净树 HEAD `ef2a335` 电池 9 步 EXIT0（smoke/m1r-suite/m1r-user 35+coverage/m1r-fault/demo-full，serial 钉值 `028048dd…`/`6137aefd…`/`0c39a3e5…`/`1ba8b13a…` 全复现）；CI run 44381221846 success；详见 [STATUS-history/m0r-m1r.md](STATUS-history/m0r-m1r.md) |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | 🟢 **done**（m2r-s1–s7，2026-11-20 判绿） | 物理页基础 + VMA/brk/mmap/COW fork + 匿名 OOM 全链交付：本地电池 + CI run 44556592736（`67bc6ca`）双绿；m2 套件 16/16、m1r-user 39/39；证据见 [STATUS-history/m2.md](STATUS-history/m2.md) |
 | M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE、RCU | 🟢 **done**（m3r-s1–s7，2026-11-21 判绿） | CFS+RT+waitqueue+时间层+kthread/workqueue/softirq+信号+RCU 全链交付：m3-suite 22/22、m1r-user 45/45+coverage、host 156、QEMU 电池 6 目标 ×2 字节稳定（HEAD `d4bc6a7` 树）；证据见 [STATUS-history/m3.md](STATUS-history/m3.md) |
-| M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | 🟡 **进行中**（m4r-s0–s3，2026-11-22） | VFS 纯核+内核胶合+fd 表补全+m4suite 脚手架+page cache 核与读路径已交付：host 195、QEMU 电池 8 目标 PASS、m4 13/13（钉 `13740dda…`）；ADR-0024；详见 m4r 滚动窗口 |
+| M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | 🟡 **进行中**（m4r-s0–s4a，2026-11-22） | VFS 纯核+内核胶合+fd 表补全+m4suite 脚手架+page cache 核与读路径+uptodate 忙等门+sys_read 改道（影子字节等价）+双页窗 readahead 已交付：host 197、QEMU 电池 8 目标 PASS、m4 16/16（钉 `49804f50…`）；ADR-0024/0025；详见 m4r 滚动窗口 |
 | M5 | 第二盘 ext4 RO 与 host/guest 黄金清单 | ⬜ pending | 等 M4 全绿；M5 起启用 host ext4 管线 |
 | M6 | 独立 `^has_journal` 副本 RW、htree/大文件/fsync | ⬜ pending | 等 M5 全绿 |
 | M7 | `has_journal` jbd2 ordered/replay 与 200 次有效 crash | ⬜ pending | 等 M6 全绿 |
@@ -317,3 +317,57 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   ——修复不触输出路径，预测成立；无镜像页边界平移，无重钉）。
 - 结论：review NOT READY 的两项 P1 已清障，**go-live ready**；下一步
   s4（等待机制 + sys_read 改道 + readahead 激活）。
+
+### m4r-s4a（uptodate 忙等门 + sys_read 改道 page cache + readahead 激活 + m4suite wave-3，2026-11-22）
+
+- 交付（ADR-0025；上游 brief：等待机制三选一、改道字节等价证明、
+  readahead 双页窗、例表 13→16）：
+  - **核心**：`pagecache/tree.rs` 新 `Peek{Absent, Filling(*mut),
+    Ready(*mut)}` + `peek()`（无计数无 pin 的门分类；Filling 携指针是
+    关窗翻转的前提——初版不带指针是本轮真实 bug 之二）；mod.rs 再导出。
+  - **胶合 `vfs_glue/pcache.rs` 重构**：`read_page_bytes`→`VfsResult<bool>`
+    过门；`wait_gate_copy`（GATE_SPIN_MAX=1_000_000 忙等 + yield_cpu +
+    活锁 panic 哨兵）；`fill_page`；`read_cached_range`（readi 精确
+    clamp）；`readahead_fill`；`kern_read_cached` 重构上 wrapper_get；
+    `kern_read_cached_ip`（fd 入口，扫描绑定/null 回退 read_uncached）；
+    套件钩子 `kern_gate_peek`/`kern_window_set`。
+  - **wrapper 生命周期 `wrapper.rs`**：`i_count`（读者引用，icache 语义）
+    + `dying` 延迟释放（unlink negate-in-place / prune 不可能在途读者
+    脚下释放映射；最后一 put 完成 release：nlink==0→zombie，否则
+    iput+free）+ `epoch` 槽代（readahead hint 槽复用假阳性 guard）+
+    `wrapper_get_for_ip`/`wrapper_get`/`wrapper_put`。
+  - **`readahead.rs` 新模块**：RA_WINDOW=2、RaHint/note_page/window/reset。
+  - **sys_read 改道 `sysfile.rs`**：T_FILE fd → sys_read_cached（同
+    BSIZE 分块/EOF 短读/部分 EFAULT/consume-then-copy 形状）；管道/
+    设备/目录冻结 sys_read_legacy。
+  - **m4suite wave-3（`pc.rs`+mod.rs+verdict/m4.rs，表 16）**：
+    gate_window、readahead_seq、probe_pressure（120 文件 churn 经
+    50 槽 inode 表 relief 阀驱逐最老 idle dentry→fresh wrapper 零页→
+    重读正确）；write_name 辅助；hit_miss 计数注释更新。
+  - host 测试 +2（peek 门态+逐索引+计数零污染）→ 197。
+- 攻坚记录：m4 首跑 15/16——gate_window FAIL 后 probe_pressure churn
+  期 `iget: no inodes` panic。bisect（跳过 gate_window 复跑）分离出
+  两枚独立真实 bug：①probe_pressure 泄漏（kern_create Ok(ip) 未 iput，
+  每文件泄一 iget 引用；且 300 并发>200 磁盘 inode 预算→ialloc panic，
+  修正=平衡 iput+churn 120）；②Peek::Filling 无指针→kern_window_set
+  关窗静默 no-op（修正=对称携带指针，双向翻转）。两修后 16/16。
+- **影子字节等价证明（ADR-0025 时序：落库前先行）**：sys_read_cached
+  内临时打点——每 BSIZE 窗口回卷 f.off 经 legacy fileread 复放，计数+
+  逐字节+EOF/错误分类全对账，mismatch 即 panic；8 目标电池全 PASS 零
+  panic 后打点移除（净树无 TEMP 残留）。
+- gate：cargo fmt --all -- --check / make all 0 警告 / check-rust-only
+  files=190→191（readahead.rs）/ test-host 197（115+77+5）/ runner 77。
+- QEMU 电池 **8 目标全 PASS**；m4 套件 **16/16**，serial 新钉
+  `49804f50027d8a9c252cb6b3bee573b90b6ccf8104c52bb77d8bdd0862fad793`。
+- 钉值：**7 项逐字节不变**（m0r serial `028048dd…20f1`；m1r-suite
+  serial `6137aefd…e585` + root `312ff398…f12e`；**m1r-user serial
+  `da87aa63…22f6f` + root `5a040446…f180d`——sys_read 改道零漂移**；
+  m1r-fault root `f702cdf2…8ca5`；m3 `e7b5a2fc…1b1e`）。重钉 2 项
+  （worktree 1891877 复现旧钉后逐行 diff 归因）：m1r-fault serial
+  `ad8e1f58…`→`96d35874…`（4 行全部仅 cr2 rodata 页
+  0x…80031000→0x…80033000，镜像 +2 页；RIP/backtrace 逐字节同）；
+  m2 serial `4ed54600…`→`13aaf67c…`（2 行：zones DMA=0x867→0x863 与
+  directmap 0xf838/0xf840→0xf834/0xf83c，镜像 −4 页水位平移，+8 关系
+  保持）。
+- 结论：ADR-0024 两项待决已关闭（ADR-0025），s4a **go-live ready**；
+  下一步 s4 续（mmap 文件页 / 回收深化 / tmpfs·tty·BIO flush 按 brief）。

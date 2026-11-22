@@ -204,3 +204,45 @@ impl PageCache {
         }
     }
 }
+
+/// The ADR-0025 fill-window gate classification of one page: Absent
+/// (no page — the miss path runs), Filling (resident but !uptodate —
+/// the insert-then-unlock-fill window; readers wait, never copy a
+/// half-filled frame), or Ready (uptodate — bytes are complete).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Peek {
+    Absent,
+    /// Carries the page pointer symmetric to Ready (the gate's
+    /// classifier AND its window-control hook both need it: closing
+    /// the window flips a Filling page back).
+    Filling(*mut PageDesc),
+    /// Carries the page pointer (NO pin taken — callers copy or
+    /// classify under their own lock hold).
+    Ready(*mut PageDesc),
+}
+
+impl PageCache {
+    /// Classify one page for the uptodate gate WITHOUT counters and
+    /// WITHOUT a pin (the busy-wait loop must not pollute hit/miss
+    /// stats; the caller copies under its own lock hold). This is the
+    /// state machine the kernel glue's wait gate spins on.
+    ///
+    /// # Safety
+    /// `m` must be a live mapping bound to this engine.
+    pub unsafe fn peek(&mut self, m: &mut AddressSpace, index: u64) -> Peek {
+        // SAFETY: ordered-list walk, read-only classification.
+        let mut p = m.root;
+        while !p.is_null() && unsafe { (*p).index } < index {
+            p = unsafe { (*p).t_next };
+        }
+        if !p.is_null() && unsafe { (*p).index } == index {
+            if unsafe { (*p).uptodate } {
+                Peek::Ready(p)
+            } else {
+                Peek::Filling(p)
+            }
+        } else {
+            Peek::Absent
+        }
+    }
+}
