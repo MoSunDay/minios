@@ -290,3 +290,30 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   空闲页水位平移，+8 关系保持）；m1r-fault serial `fa350131…`→
   `ad8e1f58…`（4 行，全部仅 cr2 rodata 页
   `0xffffffff8002e000→0x…80031000`，代码偏移逐行相同）。
+
+### m4r-s3-2（m4r-s3 静态 review 收口：两项 P1 修复 + uptodate 哨兵 + ADR-0024 补记，2026-11-22）
+
+- 修复（review 判定 2 项 P1 潜伏缺陷，均 s4 前必须清障；代码仅
+  `vfs_glue/pcache.rs`）：
+  - **P1-1 锁序**：`kern_page_probe` 收尾 `finish_refs(ip,d)` 原持
+    PC_LOCK 调用——dput 取 DENTRY_LOCK 构成 PC→DENTRY 嵌套倒置，且
+    dput 触发 prune → `wrapper_free` 再取 PC_LOCK 对非重入自旋锁递归
+    自死锁；现照 `kern_read_cached` 收尾形态将 guard 作用域收在
+    `out.nrpages` 后、finish_refs 移出 PC_LOCK（模块头锁序注释同步）；
+  - **P1-2 哨兵+补记**：`read_page_bytes` 命中快路径加
+    `debug_assert!(uptodate)`（触发即填页竞态真实可达）；ADR-0024 追加
+    「已知缺口」——insert-then-unlock-fill 填页窗口并发 lookup-hit 可见
+    未填帧，M4 不可达（boot 单上下文顺序调用），**s4 brief 必须钉死**
+    等待机制（uptodate 门/waitqueue/页锁三选一）与 sys_read 改道的
+    m1r-user 字节等价证明时点。
+- 明确不做（防 scope 蔓延）：m4suite「dcache 压力下 probe」与填页窗口
+  用例——随 s4 等待机制一并落（例表届时统一重钉）。
+- gate：fmt-check / make all 0 警告 / check-rust-only files=190 不变 /
+  test-host 195（113+77+5）/ runner 77 自测 PASS。
+- QEMU 电池 **8 目标全 PASS**（m0r 6/6、m1r 20/20、m1r-user+coverage、
+  m1r-fault 5/5、m2 16/16、m3 22/22、**m4 13/13**、demo-full）。
+- 钉值：**9 项 serial/root 全部逐字节零漂移**（含 m4
+  `13740dda…de90f`、m2 `4ed54600…`、m1r-fault serial `ad8e1f58…`
+  ——修复不触输出路径，预测成立；无镜像页边界平移，无重钉）。
+- 结论：review NOT READY 的两项 P1 已清障，**go-live ready**；下一步
+  s4（等待机制 + sys_read 改道 + readahead 激活）。

@@ -500,6 +500,16 @@
     evict_clean（FIFO 淘汰→重填）。buffer.rs 增 bread 计数器（纯增量）。
 - 状态：已接受（s3 时点：host 195、m4 13/13、电池见 STATUS s3 记录）。
 
+**已知缺口（m4r-s3-2 补记）**：读路径的填页窗口——insert 成功后放
+PC_LOCK 派发 readpage、回填前任何并发 lookup 可命中**未填帧**（!
+uptodate 即拷贝出垃圾）。M4 不可达：当前唯一读者是 boot 单上下文
+顺序调用（m4suite/sys_read 冻结在 legacy fileread），无并发窗口。
+`s4` brief 必须钉死两件事：① 等待机制三选一（uptodate 忙等门 /
+waitqueue 睡眠 / 页锁）；② sys_read 改道 page cache 的 m1r-user
+字节等价证明时点（先并行后切换，还是一次切换）。`uptodate` 字段自
+s3 起由哨兵守卫：`read_page_bytes` 命中快路径 debug_assert（触发即
+填页竞态真实可达，停下修等待机制，不是摘 assert）。
+
 ## B. 风险登记册
 
 | # | 风险 | P | I | 缓解 | 触发信号 |

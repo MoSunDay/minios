@@ -10,7 +10,9 @@
 //! Lock order (ADR-0024): DENTRY_LOCK → PC_LOCK → KMEM_LOCK
 //! (wrapper teardown nests PC inside DENTRY; reclaim frees frames
 //! under PC). PC_LOCK is never taken from interrupt context and never
-//! held across a sleeping fs call.
+//! held across a sleeping fs call. finish_refs must be called OUTSIDE
+//! PC_LOCK: dput takes DENTRY_LOCK (order DENTRY → PC) and its prune
+//! → wrapper_free path re-enters PC_LOCK (non-reentrant).
 
 use crate::fs::vfs::pagecache::{AddressSpace, PageCache, PageCacheStats, PageDesc};
 use crate::fs::vfs::{imode_has_type, VfsErr, VfsResult, S_IFREG};
@@ -155,16 +157,21 @@ pub fn kern_page_probe(path: &[u8], index: u64, out: &mut PageProbe) -> VfsResul
             return Err(VfsErr::IsDir);
         }
         let m = mapping_of(w);
-        let _g = PC_LOCK.lock();
-        let pc = pcache();
-        let pg = pc.lookup(&mut *m, index);
-        if !pg.is_null() {
-            out.present = true;
-            out.frame = (*pg).data as usize;
-            out.refcount = (*pg).refcount;
-            pc.put_page(pg);
+        {
+            let _g = PC_LOCK.lock();
+            let pc = pcache();
+            let pg = pc.lookup(&mut *m, index);
+            if !pg.is_null() {
+                out.present = true;
+                out.frame = (*pg).data as usize;
+                out.refcount = (*pg).refcount;
+                pc.put_page(pg);
+            }
+            out.nrpages = (*m).nrpages;
         }
-        out.nrpages = (*m).nrpages;
+        // finish_refs must run outside PC_LOCK (the kern_read_cached
+        // teardown shape): dput takes DENTRY_LOCK and its prune path
+        // re-enters PC_LOCK through wrapper_free.
         let _ = finish_refs(ip, d);
     }
     Ok(())
@@ -208,6 +215,7 @@ unsafe fn read_page_bytes(
         if !pg.is_null() {
             // SAFETY: pinned by the lookup; frame is PGSIZE.
             unsafe {
+                debug_assert!((*pg).uptodate, "pagecache: hit on !uptodate page");
                 core::ptr::copy_nonoverlapping((*pg).data.add(pgoff), out.as_mut_ptr(), out.len());
                 pc.put_page(pg);
             }
