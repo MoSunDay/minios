@@ -13,8 +13,9 @@
 - **外部黑盒边界**：xv6 C 只读参考；glibc/NPTL、LTP 和发行版 rootfs 仅作隔离的 Parity
   验证负载，不进入 minios 实现、Cargo workspace 或 Core 构建依赖。外部 C 不替代 Rust 交付。
 - 不交付 i686 内核、ELF32 用户态或 ia32 compat；引导过渡指令不构成 32 位 ABI。
-- **当前代码尚未迁移到本目标**，仍是原 i686/C 用户态实现；旧证据只归档，不计 Core 或
-  Parity 完成度。计划中的接口、job 与配置均为待交付契约，不表示当前已经可用。
+- **迁移已推进至 M4**（M0R–M3 判绿，见 [STATUS.md](STATUS.md)；内核与用户态均为
+  Rust，`check-rust-only` 门禁在位）；旧 i686/C 实现与证据只归档，不计 Core 或
+  Parity 完成度。计划中尚未交付的接口、job 与配置仍为待交付契约，不表示当前已经可用。
 
 ## 构建与验证权威
 

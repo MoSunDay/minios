@@ -11,7 +11,7 @@
 | Core-2.6（M0R–M8） | 🟢 M0R–M3 done（M4–M8 pending） | M0R/M1R 见 [STATUS-history/m0r-m1r.md](STATUS-history/m0r-m1r.md)；M2 判绿 HEAD `67bc6ca` + CI run 44556592736 success（[STATUS-history/m2.md](STATUS-history/m2.md)）；M3 判绿（m3 22/22、host 156、电池 6×2 字节稳定，HEAD `d4bc6a7` 树）+ `b5dfbaf` 推送触发 CI（[STATUS-history/m3.md](STATUS-history/m3.md)） |
 | Parity-2.6（M9+） | ⬜ **pending** | 未启动；权威差距表、Parity 配置和外部矩阵均未验收 |
 
-最近同步：2026-11-22。唯一实现基线为 Linux 2.6.39.4 / x86_64；不沿用旧完成度或工期。
+最近同步：2026-11-24。唯一实现基线为 Linux 2.6.39.4 / x86_64；不沿用旧完成度或工期。
 
 ## 里程碑状态
 
@@ -21,7 +21,7 @@
 | M1R | syscall/FPU/UserPtr、静态 Rust ET_EXEC 用户态与到期 required 用例 | 🟢 **done**（2026-11-19 判绿） | 净树 HEAD `ef2a335` 电池 9 步 EXIT0（smoke/m1r-suite/m1r-user 35+coverage/m1r-fault/demo-full，serial 钉值 `028048dd…`/`6137aefd…`/`0c39a3e5…`/`1ba8b13a…` 全复现）；CI run 44381221846 success；详见 [STATUS-history/m0r-m1r.md](STATUS-history/m0r-m1r.md) |
 | M2 | 匿名 VMA/brk/mmap/COW 与匿名 OOM | 🟢 **done**（m2r-s1–s7，2026-11-20 判绿） | 物理页基础 + VMA/brk/mmap/COW fork + 匿名 OOM 全链交付：本地电池 + CI run 44556592736（`67bc6ca`）双绿；m2 套件 16/16、m1r-user 39/39；证据见 [STATUS-history/m2.md](STATUS-history/m2.md) |
 | M3 | UP PIT/PIC、CFS、信号、EPIPE/SIGPIPE、RCU | 🟢 **done**（m3r-s1–s7，2026-11-21 判绿） | CFS+RT+waitqueue+时间层+kthread/workqueue/softirq+信号+RCU 全链交付：m3-suite 22/22、m1r-user 45/45+coverage、host 156、QEMU 电池 6 目标 ×2 字节稳定（HEAD `d4bc6a7` 树）；证据见 [STATUS-history/m3.md](STATUS-history/m3.md) |
-| M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | 🟡 **进行中**（m4r-s0–s4a，2026-11-22） | VFS 纯核+内核胶合+fd 表补全+m4suite 脚手架+page cache 核与读路径+uptodate 忙等门+sys_read 改道（影子字节等价）+双页窗 readahead 已交付：host 197、QEMU 电池 8 目标 PASS、m4 16/16（钉 `49804f50…`）；ADR-0024/0025；详见 m4r 滚动窗口 |
+| M4 | VFS/page cache/file-backed mmap、回收、tmpfs、tty、BIO/flush | 🟡 **进行中**（m4r-s0–s4a-2，2026-11-24） | VFS 纯核+内核胶合+fd 表补全+m4suite 脚手架+page cache 核与读路径+uptodate 忙等门+sys_read 改道（影子字节等价）+双页窗 readahead 已交付：host 197、QEMU 电池 8 目标 PASS、m4 17/17（钉 `86af3590…`）+fd 入口永久用例 m4.pc.fd_read（review 三项 P0 钉死）；ADR-0024/0025；详见 m4r 滚动窗口 |
 | M5 | 第二盘 ext4 RO 与 host/guest 黄金清单 | ⬜ pending | 等 M4 全绿；M5 起启用 host ext4 管线 |
 | M6 | 独立 `^has_journal` 副本 RW、htree/大文件/fsync | ⬜ pending | 等 M5 全绿 |
 | M7 | `has_journal` jbd2 ordered/replay 与 200 次有效 crash | ⬜ pending | 等 M6 全绿 |
@@ -421,3 +421,30 @@ M4→M5→M6→M7 不可绕过。M0R 不提前要求 M1R 用户测试或全树 R
   同）。
 - 结论：三项 P0 已永久钉死，s4a-2 **go-live ready**；下一步 s4 续
   （mmap 文件页 / 回收深化 / tmpfs·tty·BIO flush 按 brief）。
+
+### m4r-s4a-2b（plans 泄露 todo 清扫：里程碑表滞后 + README 陈旧声明闭环，2026-11-24）
+
+- 背景：对 plans/ 全目录做待办泄露清扫（TODO/FIXME/HACK/XXX 标记、
+  `- [ ]` 复选框及「尚未迁移/未完成」类陈旧声明逐一核查），判定 2 处
+  真实泄露、10 处关键词命中非泄露。
+- 泄露 1（里程碑表 M4 行，滞后一轮）：仍写 m4r-s0–s4a / m4 16/16（钉
+  `49804f50…`）——s4a-2 已交付（17/17 首跑即绿、新钉 `86af3590…e603`、
+  fd 入口永久用例钉死三项 P0）。本轮同步为 m4r-s0–s4a-2 / 17/17（钉
+  `86af3590…`）+ 摘要补记 m4.pc.fd_read，并同步「最近同步」日期
+  （照 m4r-s0 对 M2 行同类表滞后的闭环先例）。
+- 泄露 2（README.md 目标边界，M0R 前陈旧声明）：「当前代码尚未迁移到
+  本目标，仍是原 i686/C 用户态实现」与 Rollup「M0R–M3 done」直接矛盾
+  （内核与用户态均为 Rust，check-rust-only 门禁在位）；两次文档治理轮
+  （`b5dfbaf`、`cc99df2`）只动索引行，此 bullet 漏扫。本轮改写为迁移
+  已推进至 M4 的现状表述，保留「旧实现与证据只归档、未交付项仍为待交付
+  契约」语义骨架。
+- 非泄露判定（10 处命中不动）：50-risks-adr.md:155/411/565 为 ADR 接受
+  时点快照（更新走 addendum，ADR-0025 已有 s4a-2 补记）；
+  01-current-state-audit.md:40 为旧树归档审计；STATUS-history/ 5 处为
+  已归档轮次叙事；50-risks-adr.md:328「未决未阻塞信号」为信号语义术语
+  （pending signal）；23-vfs-block.md 与 20-roadmap.md 的 M4 未完成项
+  （mmap/tmpfs/tty/BIO）为真实待办契约（roadmap 本义）；04-rust-
+  userspace.md:82 为已兑现交付契约句式。TODO/FIXME/HACK/XXX 标记与
+  `- [ ]` 复选框均为 0 处。
+- 纯文档变更，零代码风险；本树复验 make all / fmt-check /
+  check-rust-only files=191（与 s4a-2 树一致，无新文件）。
